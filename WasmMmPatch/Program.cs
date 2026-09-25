@@ -1,7 +1,21 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
-var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+if (args.Contains("--audio-threads")) {
+    foreach (var path in new[] { "celeste/Celeste.dll", "celeste/Celeste.Mod.mm.dll", "celeste/Everest/Celeste.Mod.mm.dll" })
+        PatchAudioWasmThreads(Path.Combine(root, "CelesteRuntime", path));
+    return;
+}
+if (args.Contains("--content-path")) {
+    PatchContentRoot(Path.Combine(root, "CelesteRuntime", "celeste", "Celeste.dll"));
+    return;
+}
+if (args.Contains("--texture-threads")) {
+    foreach (var path in new[] { "celeste/Celeste.dll", "celeste/Celeste.Mod.mm.dll", "celeste/Everest/Celeste.Mod.mm.dll" })
+        PatchTextureLoadingThreads(Path.Combine(root, "CelesteRuntime", path));
+    return;
+}
 var dll = Path.Combine(root, "CelesteRuntime", "_framework", "Celeste.Wasm.mm.ubh2gjnetc.dll");
 var backup = Path.Combine(root, "CelesteRuntime", "_framework", "Celeste.Wasm.mm.ubh2gjnetc.dll.bak-relink-initmmflags");
 var tmp = dll + ".tmp";
@@ -62,9 +76,12 @@ foreach (var relativePath in new[] {
     Path.Combine("CelesteRuntime", "celeste", "Everest", "Celeste.Mod.mm.dll")
 }) {
     PatchCelesteWasmThreadStarts(Path.Combine(root, relativePath));
+    PatchAudioWasmThreads(Path.Combine(root, relativePath));
+    PatchTextureLoadingThreads(Path.Combine(root, relativePath));
 }
 
 Console.WriteLine("Patched Celeste WASM game thread starts");
+PatchContentRoot(Path.Combine(root, "CelesteRuntime", "celeste", "Celeste.dll"));
 
 foreach (var relativePath in new[] {
     Path.Combine("CelesteRuntime", "celeste", "Celeste.dll"),
@@ -75,6 +92,94 @@ foreach (var relativePath in new[] {
 }
 
 Console.WriteLine("Patched Everest worker task scheduler");
+
+static void PatchTextureLoadingThreads(string target) {
+    using var resolver = new DefaultAssemblyResolver();
+    resolver.AddSearchDirectory(Path.GetDirectoryName(target)!);
+    resolver.AddSearchDirectory(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(target)!, "..")));
+    resolver.AddSearchDirectory(Path.Combine(Path.GetDirectoryName(target)!, "Everest"));
+    using var module = ModuleDefinition.ReadModule(target, new ReaderParameters { InMemory = true, AssemblyResolver = resolver });
+    var methods = module.GetTypes().Where(t => t.FullName is "Monocle.VirtualTexture" or "Monocle.patch_VirtualTexture")
+        .SelectMany(t => t.Methods).Where(m => m.Name == "StartFastTextureLoading" && m.HasBody).ToArray();
+    if (methods.Length == 0) throw new InvalidOperationException("Missing fast texture loading entry point: " + target);
+    var changed = false;
+    foreach (var method in methods) {
+        if (method.Body.Instructions.Count == 1 && method.Body.Instructions[0].OpCode == OpCodes.Ret) continue;
+        // Everest enables this on >= 4 CPUs. Its background texture tasks can
+        // exhaust Gecko's worker ceiling and deadlock WaitFinishFastTextureLoading.
+        // Leave ftlEnabled false; Reload then uses its existing synchronous path.
+        // ftlFinish starts signaled, so the normal completion wait still works.
+        ReplaceWithReturn(method);
+        changed = true;
+    }
+    if (!changed) return;
+    module.Write(target + ".tmp");
+    File.Copy(target + ".tmp", target, overwrite: true);
+    File.Delete(target + ".tmp");
+    Console.WriteLine("Disabled WASM parallel texture loading: " + target);
+}
+
+static void PatchContentRoot(string target) {
+    using var module = ModuleDefinition.ReadModule(target, new ReaderParameters { InMemory = true });
+    var engine = module.GetType("Monocle.Engine");
+    var changed = false;
+    foreach (var method in engine.Methods.Where(m => m.IsConstructor && m.HasBody)) {
+        foreach (var call in method.Body.Instructions.Where(i => i.Operand is MethodReference m &&
+            m.DeclaringType.FullName == "Microsoft.Xna.Framework.Content.ContentManager" && m.Name == "set_RootDirectory")) {
+            var path = call.Previous;
+            if (path.OpCode != OpCodes.Ldstr) throw new InvalidOperationException("Unexpected content-root initialization");
+            if ((string)path.Operand == "/libsdl/Content") continue;
+            if ((string)path.Operand != "Content") throw new InvalidOperationException("Unexpected content root: " + path.Operand);
+            // The WASM loader sets Engine.AssemblyDirectory to "/", but Everest's
+            // PathGame is "/libsdl". An absolute root keeps both content paths equal.
+            path.Operand = "/libsdl/Content";
+            changed = true;
+        }
+    }
+    if (!changed) return;
+    module.Write(target + ".tmp");
+    File.Copy(target + ".tmp", target, overwrite: true);
+    File.Delete(target + ".tmp");
+    Console.WriteLine("Patched canonical WASM content root: " + target);
+}
+
+static void PatchAudioWasmThreads(string target) {
+    using var resolver = new DefaultAssemblyResolver();
+    resolver.AddSearchDirectory(Path.GetDirectoryName(target)!);
+    resolver.AddSearchDirectory(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(target)!, "..")));
+    resolver.AddSearchDirectory(Path.Combine(Path.GetDirectoryName(target)!, "Everest"));
+    using var audioModule = ModuleDefinition.ReadModule(target, new ReaderParameters { InMemory = true, AssemblyResolver = resolver });
+    var methods = audioModule.GetTypes().Where(t => t.FullName is "Celeste.Audio" or "Celeste.patch_Audio")
+        .SelectMany(t => t.Methods).Where(m => m.Name == "Init" && m.HasBody);
+    var changed = false;
+    foreach (var method in methods) {
+        foreach (var call in method.Body.Instructions.Where(i => i.Operand is MethodReference m && m.DeclaringType.FullName == "FMOD.Studio.System" && m.Name == "initialize").ToArray()) {
+            var coreFlags = call.Previous.Previous;
+            if (coreFlags.OpCode == OpCodes.Ldc_I4_3 && coreFlags.Previous.OpCode == OpCodes.Or) {
+                var studioFlags = coreFlags.Previous.Previous;
+                if (studioFlags.OpCode == OpCodes.Ldc_I4 && (int)studioFlags.Operand == 20) continue;
+                if (studioFlags.OpCode != OpCodes.Ldc_I4_4) throw new InvalidOperationException("Unexpected patched FMOD flags in " + target);
+                studioFlags.OpCode = OpCodes.Ldc_I4;
+                studioFlags.Operand = 20;
+                changed = true;
+                continue;
+            }
+            if (coreFlags.OpCode != OpCodes.Ldc_I4_0) throw new InvalidOperationException("Unexpected FMOD initialization arguments in " + target);
+            // SYNCHRONOUS_UPDATE | LOAD_FROM_UPDATE: no Studio or bank-loader threads.
+            // Core STREAM_FROM_UPDATE | MIX_FROM_UPDATE likewise avoids audio workers.
+            var il = method.Body.GetILProcessor();
+            il.InsertBefore(coreFlags, Instruction.Create(OpCodes.Ldc_I4, 20));
+            il.InsertBefore(coreFlags, Instruction.Create(OpCodes.Or));
+            coreFlags.OpCode = OpCodes.Ldc_I4_3;
+            changed = true;
+        }
+    }
+    if (!changed) return;
+    audioModule.Write(target + ".tmp");
+    File.Copy(target + ".tmp", target, overwrite: true);
+    File.Delete(target + ".tmp");
+    Console.WriteLine("Patched FMOD synchronous update flags: " + target);
+}
 
 static void RemoveSocketRelinks(ModuleDefinition module) {
     var rules = module.GetTypes().First(t => t.FullName == "MonoMod.MonoModRules");

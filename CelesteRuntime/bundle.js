@@ -4994,6 +4994,13 @@ async function start(canvas) {
     }
 
     bootStatus("starting game");
+    setTimeout(() => {
+      if (window.__celesteAndroidRendered) return;
+      const threads = runtime.Module.PThread;
+      for (const worker of [...threads.runningWorkers, ...threads.unusedWorkers]) {
+        console.warn("[android-port] waiting for frame: worker " + JSON.stringify(worker.info));
+      }
+    }, 10000);
     for (let i = 0; i < 5; i++) {
       if (!await loaderExports.CelesteLoader.RunOneFrame()) {
         throw new Error("Celeste exited during startup");

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using Celeste;
 using Celeste.Mod;
+using Celeste.Mod.UI;
 using Microsoft.Xna.Framework;
 using Monocle;
 
@@ -37,6 +38,7 @@ public sealed class MouseUIModule : EverestModule {
         On.Celeste.OuiJournal.Update += OnJournalUpdate;
         On.Celeste.OuiTitleScreen.Update += OnTitleScreenUpdate;
         On.Celeste.OuiCredits.Update += OnCreditsUpdate;
+        On.Celeste.Pico8.Emulator.btn += OnPico8Button;
         On.Monocle.Engine.Update += OnEngineUpdate;
         On.Monocle.MInput.Update += OnMInputUpdate;
         On.Celeste.ButtonUI.Render += OnButtonUIRender;
@@ -53,6 +55,7 @@ public sealed class MouseUIModule : EverestModule {
         On.Celeste.OuiJournal.Update -= OnJournalUpdate;
         On.Celeste.OuiTitleScreen.Update -= OnTitleScreenUpdate;
         On.Celeste.OuiCredits.Update -= OnCreditsUpdate;
+        On.Celeste.Pico8.Emulator.btn -= OnPico8Button;
         On.Monocle.Engine.Update -= OnEngineUpdate;
         On.Monocle.MInput.Update -= OnMInputUpdate;
         On.Celeste.ButtonUI.Render -= OnButtonUIRender;
@@ -166,12 +169,92 @@ public sealed class MouseUIModule : EverestModule {
 
     private static bool IsAnyMenuOpen(Scene scene) {
         return scene != null &&
-            (scene.Entities.Any(e => e is TextMenu menu && menu.Visible && menu.Focused) ||
+            (GetTopMenu(scene) != null ||
              scene is Overworld ov && (ov.IsCurrent<OuiJournal>() || ov.IsCurrent<OuiCredits>()));
     }
 
     private static TextMenu GetTopMenu(Scene scene) {
-        return scene?.Entities.OfType<TextMenu>().LastOrDefault(m => m.Visible && m.Focused);
+        TextMenu ouiMenu =
+            GetCurrentOuiTextMenu(scene);
+
+        if (ouiMenu != null) {
+            return ouiMenu;
+        }
+
+        return scene?.Entities
+            .OfType<TextMenu>()
+            .Where(m => m.Visible)
+            .OrderByDescending(m => m.Focused)
+            .ThenBy(m => m.Depth)
+            .FirstOrDefault();
+    }
+
+    private static TextMenu GetCurrentOuiTextMenu(
+        Scene scene) {
+
+        if (scene is not Overworld overworld) {
+            return null;
+        }
+
+        if (overworld.IsCurrent<OuiGenericMenu>()) {
+            TextMenu menu =
+                GetPrivateMenu(
+                    overworld.GetUI<OuiGenericMenu>());
+
+            if (menu != null) {
+                return menu;
+            }
+        }
+
+        if (overworld.IsCurrent<OuiModOptions>()) {
+            TextMenu menu =
+                GetPrivateMenu(
+                    overworld.GetUI<OuiModOptions>());
+
+            if (menu != null) {
+                return menu;
+            }
+        }
+
+        if (overworld.IsCurrent<OuiOptions>()) {
+            TextMenu menu =
+                GetPrivateMenu(
+                    overworld.GetUI<OuiOptions>());
+
+            if (menu != null) {
+                return menu;
+            }
+        }
+
+        return null;
+    }
+
+    private static TextMenu GetPrivateMenu(
+        object owner) {
+
+        if (owner == null) {
+            return null;
+        }
+
+        Type type = owner.GetType();
+        while (type != null) {
+            FieldInfo field =
+                type.GetField(
+                    "menu",
+                    BindingFlags.Instance |
+                    BindingFlags.NonPublic |
+                    BindingFlags.Public);
+
+            if (field?.GetValue(owner) is TextMenu menu &&
+                menu.Visible) {
+
+                return menu;
+            }
+
+            type = type.BaseType;
+        }
+
+        return null;
     }
 
     private static void DrawBackButton() {
@@ -249,6 +332,10 @@ public sealed class MouseUIModule : EverestModule {
         }
 
         public override void Render() {
+            if (Engine.Scene is Pico8.Emulator) {
+                DrawPico8PointerControls();
+            }
+
             if (ShouldShowBackButton()) {
                 DrawBackButton();
             }
@@ -763,6 +850,121 @@ public sealed class MouseUIModule : EverestModule {
         orig(credits);
     }
 
+    private static bool OnPico8Button(
+        On.Celeste.Pico8.Emulator.orig_btn orig,
+        Pico8.Emulator emulator,
+        int button) {
+
+        bool pressed = orig(emulator, button);
+        if (pressed || button < 0 || button > 5) {
+            return pressed;
+        }
+
+        return IsPico8PointerButton(button);
+    }
+
+    private static void DrawPico8PointerControls() {
+        Draw.Rect(60f, 735f, 370f, 190f, Color.Black * 0.32f);
+        Draw.HollowRect(60f, 735f, 370f, 190f, Color.White * 0.30f);
+
+        Draw.Rect(82f, 800f, 126f, 60f, Color.White * 0.12f);
+        Draw.Rect(282f, 800f, 126f, 60f, Color.White * 0.12f);
+        Draw.Rect(185f, 702f, 120f, 60f, Color.White * 0.12f);
+        Draw.Rect(185f, 898f, 120f, 60f, Color.White * 0.12f);
+
+        DrawPico8Label("<", new Vector2(145f, 830f));
+        DrawPico8Label(">", new Vector2(345f, 830f));
+        DrawPico8Label("^", new Vector2(245f, 732f));
+        DrawPico8Label("v", new Vector2(245f, 928f));
+
+        Draw.Circle(new Vector2(1545f, 842f), 72f, Color.White * 0.13f, 24);
+        Draw.Circle(new Vector2(1690f, 735f), 72f, Color.White * 0.13f, 24);
+        Draw.Circle(new Vector2(1545f, 842f), 74f, Color.White * 0.30f, 24);
+        Draw.Circle(new Vector2(1690f, 735f), 74f, Color.White * 0.30f, 24);
+
+        DrawPico8Label("O", new Vector2(1545f, 842f));
+        DrawPico8Label("X", new Vector2(1690f, 735f));
+    }
+
+    private static void DrawPico8Label(
+        string label,
+        Vector2 position) {
+
+        ActiveFont.DrawOutline(
+            label,
+            position,
+            new Vector2(0.5f, 0.5f),
+            Vector2.One * 0.42f,
+            Color.White,
+            2f,
+            Color.Black);
+    }
+
+    private static bool IsPico8PointerButton(
+        int button) {
+
+        bool active =
+            UsingTouch
+                ? OptionalMobileBridge.TouchDown()
+                : MInput.Mouse.CheckLeftButton;
+
+        if (!active) {
+            return false;
+        }
+
+        Vector2 pointer = PointerPosition();
+
+        if (pointer.X < 0f ||
+            pointer.Y < 0f) {
+
+            return false;
+        }
+
+        Vector2 dpadCenter =
+            new(
+                245f,
+                830f);
+
+        Vector2 buttonO =
+            new(
+                1545f,
+                842f);
+
+        Vector2 buttonX =
+            new(
+                1690f,
+                735f);
+
+        switch (button) {
+            case 0:
+                return pointer.X >= dpadCenter.X - 185f &&
+                    pointer.X <= dpadCenter.X - 45f &&
+                    pointer.Y >= dpadCenter.Y - 95f &&
+                    pointer.Y <= dpadCenter.Y + 95f;
+            case 1:
+                return pointer.X >= dpadCenter.X + 45f &&
+                    pointer.X <= dpadCenter.X + 185f &&
+                    pointer.Y >= dpadCenter.Y - 95f &&
+                    pointer.Y <= dpadCenter.Y + 95f;
+            case 2:
+                return pointer.X >= dpadCenter.X - 95f &&
+                    pointer.X <= dpadCenter.X + 95f &&
+                    pointer.Y >= dpadCenter.Y - 185f &&
+                    pointer.Y <= dpadCenter.Y - 45f;
+            case 3:
+                return pointer.X >= dpadCenter.X - 95f &&
+                    pointer.X <= dpadCenter.X + 95f &&
+                    pointer.Y >= dpadCenter.Y + 45f &&
+                    pointer.Y <= dpadCenter.Y + 185f;
+            case 4:
+                return Vector2.Distance(pointer, buttonO) <= 96f;
+            case 5:
+                return Vector2.Distance(pointer, buttonX) <= 96f;
+            default:
+                return false;
+        }
+    }
+
     private static void OnTextMenuUpdate(
         On.Celeste.TextMenu.orig_Update orig,
         TextMenu menu) {
@@ -957,6 +1159,18 @@ public sealed class MouseUIModule : EverestModule {
             return;
         }
 
+        if (menu.Scene is Overworld overworld) {
+            if (overworld.IsCurrent<OuiModOptions>()) {
+                overworld.Goto<OuiMainMenu>();
+                return;
+            }
+
+            if (overworld.IsCurrent<OuiOptions>()) {
+                overworld.Goto<OuiMainMenu>();
+                return;
+            }
+        }
+
         if (menu.OnCancel != null) {
             try {
                 menu.OnCancel.Invoke();
@@ -965,8 +1179,14 @@ public sealed class MouseUIModule : EverestModule {
             }
         }
 
-        if (menu.Scene is Overworld overworld) {
-            overworld.Goto<OuiMainMenu>();
+        try {
+            menu.Close();
+            return;
+        } catch {
+        }
+
+        if (menu.Scene is Overworld fallbackOverworld) {
+            fallbackOverworld.Goto<OuiMainMenu>();
         }
     }
 
@@ -1057,6 +1277,7 @@ public sealed class MouseUIModule : EverestModule {
         private static MethodInfo consumeTouchTapMethod;
         private static MethodInfo touchXMethod;
         private static MethodInfo touchYMethod;
+        private static MethodInfo touchDownMethod;
         private static MethodInfo consumeTouchScrollMethod;
         private static int failedResolveFrames;
 
@@ -1106,6 +1327,17 @@ public sealed class MouseUIModule : EverestModule {
             } catch {
                 ClearBinding();
                 return -1f;
+            }
+        }
+
+        public static bool TouchDown() {
+            EnsureResolved();
+            try {
+                return touchDownMethod != null &&
+                    (bool)touchDownMethod.Invoke(null, null);
+            } catch {
+                ClearBinding();
+                return false;
             }
         }
 
@@ -1162,6 +1394,9 @@ public sealed class MouseUIModule : EverestModule {
             touchYMethod = apiType.GetMethod(
                 "TouchY",
                 BindingFlags.Public | BindingFlags.Static);
+            touchDownMethod = apiType.GetMethod(
+                "TouchDown",
+                BindingFlags.Public | BindingFlags.Static);
             consumeTouchScrollMethod = apiType.GetMethod(
                 "ConsumeTouchScroll",
                 BindingFlags.Public | BindingFlags.Static);
@@ -1182,6 +1417,7 @@ public sealed class MouseUIModule : EverestModule {
             consumeTouchTapMethod = null;
             touchXMethod = null;
             touchYMethod = null;
+            touchDownMethod = null;
             consumeTouchScrollMethod = null;
         }
     }

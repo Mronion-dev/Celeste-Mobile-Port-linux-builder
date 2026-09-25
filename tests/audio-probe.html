@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Isolated FMOD startup probe</title>
+<pre id="status">Creating runtime…</pre>
+<canvas id="canvas" class="canvas"></canvas>
+<script type="module">
+const query = new URLSearchParams(location.search);
+const scenario = query.get('case') || 'normal';
+let timer;
+const report = (...args) => {
+  const text = args.map(v => v?.stack || (typeof v === 'string' ? v : JSON.stringify(v))).join(' ');
+  document.querySelector('#status').textContent = text;
+  if (text.includes('[audio-probe] DONE')) clearTimeout(timer);
+  fetch('/report', {method: 'POST', body: JSON.stringify({scenario, text})}).catch(() => {});
+};
+for (const level of ['log', 'info', 'warn', 'error']) {
+  const original = console[level].bind(console);
+  console[level] = (...args) => { original(...args); report(...args); };
+}
+addEventListener('error', e => report('ERROR', e.message));
+addEventListener('unhandledrejection', e => report('ERROR', e.reason));
+const {dotnet} = await import('/_framework/dotnet.js');
+const environmentVariables = {DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: '1'};
+if (query.has('processors')) environmentVariables.DOTNET_PROCESSOR_COUNT = query.get('processors');
+report('[audio-probe] runtime create', scenario, environmentVariables);
+const runtime = await dotnet.withConfig({
+  pthreadPoolInitialSize: 8, maxParallelDownloads: 8,
+  disableIntegrityCheck: true, environmentVariables,
+}).create();
+report('[audio-probe] runtime ready');
+await runtime.runMain();
+report('[audio-probe] managed entry ready');
+const dump = () => {
+  for (const worker of [...runtime.Module.PThread.runningWorkers, ...runtime.Module.PThread.unusedWorkers]) {
+    report('[audio-probe] worker', worker.info);
+  }
+};
+timer = setTimeout(() => { report('[audio-probe] TIMEOUT'); dump(); }, 8000);
+try {
+  const deputy = runtime.Module.PThread.runningWorkers.find(w => w.info?.isDeputy);
+  if (!deputy) throw Error('No deputy worker');
+  deputy.postMessage({cmd: 'audio-probe', options: {sync: query.get('sync') === '1', loadFromUpdate: query.get('loadFromUpdate') === '1'}});
+  report('[audio-probe] dispatched native calls');
+  dump();
+} catch (e) {
+  report('[audio-probe] FAIL', e);
+}
+</script>

@@ -116,10 +116,11 @@
             const send = (level, args) => {
                 try {
                     const message = Array.from(args).map(serialize).join(" ").slice(0, 1800);
-                    if (!window.__celesteAndroidRendered && message.startsWith("GAME DISPLAYED")) {
+                    if (!window.__celesteAndroidRendered && message.startsWith("[android-port] frame confirmed ")) {
                         window.__celesteAndroidRendered = true;
                         setTimeout(() => window.celesteForceGameVisible?.(), 0);
-                        setTimeout(() => window.celesteLogCanvasState?.("rendered"), 250);
+                    } else if (!window.__celesteAndroidRendered && message.startsWith("GAME DISPLAYED")) {
+                        window.celesteSetBootStatus?.("Waiting for the first rendered frame…");
                     }
                     fetch("/__android_port_log?level=" + encodeURIComponent(level) + "&msg=" + encodeURIComponent(message), { cache: "no-store" }).catch(() => {});
                 } catch (e) {
@@ -176,6 +177,7 @@
         };
         window.celestePrepareCanvas = prepareCanvas;
         const forceGameVisible = () => {
+            if (!window.__celesteAndroidRendered) return;
             document.body.classList.add('playing');
             document.body.classList.add('game-rendered');
             document.getElementById("static-boot")?.remove();
@@ -198,7 +200,7 @@
                 const rect = canvas.getBoundingClientRect();
                 let pixel = "unread";
                 try {
-                    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+                    const gl = canvas.controlTransferredOffscreen ? null : canvas.getContext("webgl2") || canvas.getContext("webgl");
                     if (gl) {
                         const lost = typeof gl.isContextLost === "function" && gl.isContextLost();
                         if (lost) {
@@ -217,7 +219,7 @@
                             pixel = `${rgba[0]},${rgba[1]},${rgba[2]},${rgba[3]}`;
                         }
                     } else {
-                        pixel = "no-webgl";
+                        pixel = canvas.controlTransferredOffscreen ? "worker-owned (see frame confirmation)" : "no-webgl";
                     }
                 } catch (readErr) {
                     pixel = "read-error:" + (readErr.message || String(readErr));
@@ -237,13 +239,6 @@
             if (status) {
                 status.textContent = text;
                 status.classList.toggle("error", error);
-            }
-            const lowerText = text.toLowerCase();
-            if (
-                (lowerText.includes("game displayed") || lowerText.includes("complete")) &&
-                !document.body.classList.contains("playing")
-            ) {
-                setTimeout(forceGameVisible, 200);
             }
         };
         window.celesteSetBootStatus = setBootStatus;
@@ -427,6 +422,9 @@
     }
     body.game-rendered #static-boot {
         display: none !important;
+    }
+    body:not(.game-rendered) main:has(#boot-status-label) {
+        z-index: 2147483647 !important;
     }
     body.playing canvas { position: fixed !important; top: 0; left: 0; right: 0; bottom: 0; width: 100vw !important; height: 100vh !important; z-index: 2147483646 !important; background: #000; opacity: 1 !important; visibility: visible !important; }
 </style>

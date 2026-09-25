@@ -1951,6 +1951,8 @@ var PThread = {
    } else if (cmd === "loaded") {
     worker.loaded = true;
     onFinishedLoading(worker);
+   } else if (cmd === "celesteFrameConfirmed") {
+    console.info(d["text"]);
    } else if (cmd === "alert") {
     alert(`Thread ${d["threadId"]}: ${d["text"]}`);
    } else if (d.target === "setimmediate") {
@@ -4455,7 +4457,61 @@ var _emscripten_glBlendFunc = _glBlendFunc;
 
 var _emscripten_glBlendFuncSeparate = _glBlendFuncSeparate;
 
-/** @suppress {duplicate } */ var _glBlitFramebuffer = (x0, x1, x2, x3, x4, x5, x6, x7, x8, x9) => GLctx.blitFramebuffer(x0, x1, x2, x3, x4, x5, x6, x7, x8, x9);
+// Read on the context-owning thread: the DOM canvas is transferred to a worker.
+var celesteCheckDisplayFrame = () => {
+ if (GLctx.__celesteFrameConfirmed || GLctx.isContextLost()) return;
+ var now = performance.now();
+ if (now < (GLctx.__celesteNextFrameCheck || 0)) return;
+ if (GLctx.getParameter(GLctx.DRAW_FRAMEBUFFER_BINDING)) return;
+ GLctx.__celesteNextFrameCheck = now + 500;
+ var width = GLctx.drawingBufferWidth, height = GLctx.drawingBufferHeight;
+ if (!width || !height) return;
+ var readFramebuffer = GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+ var packBuffer = GLctx.getParameter(GLctx.PIXEL_PACK_BUFFER_BINDING);
+ var packAlignment = GLctx.getParameter(GLctx.PACK_ALIGNMENT);
+ var packRowLength = GLctx.getParameter(GLctx.PACK_ROW_LENGTH);
+ var packSkipPixels = GLctx.getParameter(GLctx.PACK_SKIP_PIXELS);
+ var packSkipRows = GLctx.getParameter(GLctx.PACK_SKIP_ROWS);
+ try {
+  GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER, null);
+  GLctx.bindBuffer(GLctx.PIXEL_PACK_BUFFER, null);
+  GLctx.pixelStorei(GLctx.PACK_ALIGNMENT, 1);
+  GLctx.pixelStorei(GLctx.PACK_ROW_LENGTH, 0);
+  GLctx.pixelStorei(GLctx.PACK_SKIP_PIXELS, 0);
+  GLctx.pixelStorei(GLctx.PACK_SKIP_ROWS, 0);
+  var rgba = new Uint8Array(4);
+  for (var y = 1; y <= 3; y++) {
+   for (var x = 1; x <= 3; x++) {
+    rgba.fill(0);
+    GLctx.readPixels(Math.floor(width * x / 4), Math.floor(height * y / 4), 1, 1, GLctx.RGBA, GLctx.UNSIGNED_BYTE, rgba);
+    if (rgba[0] || rgba[1] || rgba[2]) {
+     GLctx.__celesteFrameConfirmed = true;
+     var message = "[android-port] frame confirmed " + width + "x" + height + " pixel=" + Array.from(rgba).join(",");
+     if (ENVIRONMENT_IS_PTHREAD) postMessage({ cmd: "celesteFrameConfirmed", text: message });
+     else console.info(message);
+     return;
+    }
+   }
+  }
+ } catch (error) {
+  if (!GLctx.__celesteFrameCheckError) {
+   GLctx.__celesteFrameCheckError = true;
+   out("[android-port] frame read failed: " + error.message);
+  }
+ } finally {
+  GLctx.pixelStorei(GLctx.PACK_ALIGNMENT, packAlignment);
+  GLctx.pixelStorei(GLctx.PACK_ROW_LENGTH, packRowLength);
+  GLctx.pixelStorei(GLctx.PACK_SKIP_PIXELS, packSkipPixels);
+  GLctx.pixelStorei(GLctx.PACK_SKIP_ROWS, packSkipRows);
+  GLctx.bindBuffer(GLctx.PIXEL_PACK_BUFFER, packBuffer);
+  GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER, readFramebuffer);
+ }
+};
+
+/** @suppress {duplicate } */ var _glBlitFramebuffer = (x0, x1, x2, x3, x4, x5, x6, x7, x8, x9) => {
+ GLctx.blitFramebuffer(x0, x1, x2, x3, x4, x5, x6, x7, x8, x9);
+ celesteCheckDisplayFrame();
+};
 
 var _emscripten_glBlitFramebuffer = _glBlitFramebuffer;
 
@@ -4835,6 +4891,7 @@ var _emscripten_glDisableVertexAttribArray = _glDisableVertexAttribArray;
 
 /** @suppress {duplicate } */ var _glDrawArrays = (mode, first, count) => {
  GLctx.drawArrays(mode, first, count);
+ celesteCheckDisplayFrame();
 };
 
 var _emscripten_glDrawArrays = _glDrawArrays;
@@ -4885,6 +4942,7 @@ var _emscripten_glDrawBuffersWEBGL = _glDrawBuffersWEBGL;
 /** @suppress {duplicate } */ function _glDrawElements(mode, count, type, indices) {
  indices >>>= 0;
  GLctx.drawElements(mode, count, type, indices);
+ celesteCheckDisplayFrame();
 }
 
 var _emscripten_glDrawElements = _glDrawElements;
@@ -6471,10 +6529,12 @@ var _emscripten_glStencilOpSeparate = _glStencilOpSeparate;
 
 /** @suppress {duplicate } */ function _glTexImage2D(target, level, internalFormat, width, height, border, format, type, pixels) {
  pixels >>>= 0;
- if (internalFormat === 0x8C41) {
-  console.warn("[android-port] rewriting GL_RGB16F texImage2D to GL_RGBA16F");
-  internalFormat = 0x881A;
-  if (format === 0x1907) format = 0x1908;
+ // SRGB8 (not RGB16F) is sampleable but not color-renderable in WebGL 2.
+ // Only promote empty render-target allocations; RGB uploads have three-byte pixels.
+ if (internalFormat === 0x8C41 && !pixels && !GLctx.currentPixelUnpackBufferBinding) {
+  out("[android-port] rewriting GL_SRGB8 texImage2D to GL_SRGB8_ALPHA8");
+  internalFormat = 0x8C43;
+  format = 0x1908;
  }
  if (true) {
   if (GLctx.currentPixelUnpackBufferBinding) {
@@ -6529,8 +6589,8 @@ var _emscripten_glTexParameteriv = _glTexParameteriv;
 
 /** @suppress {duplicate } */ var _glTexStorage2D = (x0, x1, x2, x3, x4) => {
  if (x2 === 0x8C41) {
-  console.warn("[android-port] rewriting GL_RGB16F texStorage2D to GL_RGBA16F");
-  x2 = 0x881A;
+  out("[android-port] rewriting GL_SRGB8 texStorage2D to GL_SRGB8_ALPHA8");
+  x2 = 0x8C43;
  }
  GLctx.texStorage2D(x0, x1, x2, x3, x4);
 };
