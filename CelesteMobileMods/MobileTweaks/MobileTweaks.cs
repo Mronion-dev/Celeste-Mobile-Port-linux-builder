@@ -12,47 +12,46 @@ using Monocle;
 
 namespace Celeste.Mod.MobileTweaks;
 
-public sealed class MobileTweaksSettings : EverestModuleSettings {
+public sealed class MobileTweaksSettings : EverestModuleSettings
+{
     [SettingIgnore]
     public bool CameraCentering { get; set; } = true;
 }
 
-public sealed class MobileTweaksModule : EverestModule {
+public sealed class MobileTweaksModule : EverestModule
+{
     public static MobileTweaksModule Instance { get; private set; }
-
     public static MobileTweaksSettings Settings =>
         (MobileTweaksSettings)Instance._Settings;
-
     public override Type SettingsType =>
         typeof(MobileTweaksSettings);
-
     private bool skipNextTitleScreen = true;
     private string lastMenuSignature;
-
-    public MobileTweaksModule() {
+    public MobileTweaksModule()
+    {
         Instance = this;
     }
-
-    public override void Load() {
+    public override void Load()
+    {
+        ForceSkipEverestOobe();
         ForceSkipIntro();
-
         On.Celeste.Level.Update += OnLevelUpdate;
         On.Celeste.Overworld.ReloadMenus += OnOverworldReloadMenus;
         On.Celeste.MenuOptions.Create += OnCreateOptionsMenu;
         On.Celeste.OuiMainMenu.Update += OnMainMenuUpdate;
     }
-
-    public override void Initialize() {
+    public override void Initialize()
+    {
+        ForceSkipEverestOobe();
         ForceSkipIntro();
     }
-
-    public override void Unload() {
+    public override void Unload()
+    {
         On.Celeste.Level.Update -= OnLevelUpdate;
         On.Celeste.Overworld.ReloadMenus -= OnOverworldReloadMenus;
         On.Celeste.MenuOptions.Create -= OnCreateOptionsMenu;
         On.Celeste.OuiMainMenu.Update -= OnMainMenuUpdate;
     }
-
     /// <summary>
     /// MobileTweaks' own settings are intentionally moved into Celeste's normal
     /// Options screen while this module is installed.
@@ -60,69 +59,84 @@ public sealed class MobileTweaksModule : EverestModule {
     public override void CreateModMenuSection(
         TextMenu menu,
         bool inGame,
-        EventInstance snapshot) {
+        EventInstance snapshot)
+    {
     }
-
-    private static bool IsBrowserRuntime() {
-        try {
+    private static bool IsBrowserRuntime()
+    {
+        try
+        {
             return string.Equals(
                     Environment.GetEnvironmentVariable("EVEREST_PATH"),
                     "/libsdl",
                     StringComparison.Ordinal) ||
                 !string.IsNullOrEmpty(
                     Environment.GetEnvironmentVariable("CEL_WASM_LOG_LEVEL"));
-        } catch {
+        }
+        catch
+        {
             return false;
         }
     }
-
-    private static void ForceSkipIntro() {
+    private static void ForceSkipEverestOobe()
+    {
+        // Everest's first-run OuiOOBE screen is shown only while
+        // CoreModule.Settings.CurrentVersion is null.
+        //
+        // Set it before the Overworld builds its startup UI so the welcome
+        // screen / "What do you want to do?" questionnaire is never entered.
+        if (CoreModule.Settings.CurrentVersion == null)
+        {
+            CoreModule.Settings.CurrentVersion = Everest.Version.ToString();
+        }
+    }
+    private static void ForceSkipIntro()
+    {
         // Keep Everest's persistent runtime flag enabled.
         CoreModule.Settings.LaunchWithoutIntro = true;
-
         // Everest checks LaunchWithoutIntro in GameLoader.Begin(). A normal
         // code module can load after Begin has already happened, so also mark
         // the current loader as skipped when possible.
-        try {
-            if (Engine.Scene is GameLoader loader) {
+        try
+        {
+            if (Engine.Scene is GameLoader loader)
+            {
                 FieldInfo skipped = loader.GetType().GetField(
                     "skipped",
                     BindingFlags.Instance |
                     BindingFlags.NonPublic |
                     BindingFlags.Public);
-
                 skipped?.SetValue(loader, true);
             }
-        } catch (Exception e) {
+        }
+        catch (Exception e)
+        {
             Logger.Log(
                 LogLevel.Warn,
                 "MobileTweaks",
                 $"Could not force current GameLoader intro skip: {e.Message}");
         }
     }
-
     private void OnOverworldReloadMenus(
         On.Celeste.Overworld.orig_ReloadMenus orig,
         Overworld overworld,
-        Overworld.StartMode startMode) {
-
+        Overworld.StartMode startMode)
+    {
+        ForceSkipEverestOobe();
         ForceSkipIntro();
-
         if (skipNextTitleScreen &&
-            startMode == Overworld.StartMode.Titlescreen) {
-
+            startMode == Overworld.StartMode.Titlescreen)
+        {
             skipNextTitleScreen = false;
             startMode = Overworld.StartMode.MainMenu;
         }
-
         orig(overworld, startMode);
     }
-
     private static TextMenu OnCreateOptionsMenu(
         On.Celeste.MenuOptions.orig_Create orig,
         bool inGame,
-        EventInstance snapshot) {
-
+        EventInstance snapshot)
+    {
         TextMenu options = orig(inGame, snapshot);
         RemoveOptionButton(
             options,
@@ -130,14 +144,13 @@ public sealed class MobileTweaksModule : EverestModule {
         RemoveOptionButton(
             options,
             "OPTIONS_BTNCONFIG");
-
         // In the embedded browser wrapper, fullscreen is not a user-facing
         // choice. Enforce windowed rendering and physically remove the vanilla
         // Fullscreen row.
-        if (IsBrowserRuntime()) {
+        if (IsBrowserRuntime())
+        {
             string fullscreenLabel =
                 Dialog.Clean("OPTIONS_FULLSCREEN");
-
             TextMenu.Item fullscreen =
                 options.Items.FirstOrDefault(item =>
                     item is TextMenu.OnOff onOff &&
@@ -145,20 +158,17 @@ public sealed class MobileTweaksModule : EverestModule {
                         onOff.Label,
                         fullscreenLabel,
                         StringComparison.OrdinalIgnoreCase));
-
-            if (fullscreen != null) {
+            if (fullscreen != null)
+            {
                 options.Remove(fullscreen);
             }
-
             global::Celeste.Settings.Instance.Fullscreen = false;
         }
-
         options.ItemSpacing =
             Math.Max(options.ItemSpacing, 10f);
-
         options.Add(new TextMenu.SubHeader("MOBILE"));
-
-        if (MobileBridgeProxy.Available) {
+        if (MobileBridgeProxy.Available)
+        {
             options.Add(
                 new TextMenu.OnOff(
                     "HAPTICS",
@@ -166,22 +176,21 @@ public sealed class MobileTweaksModule : EverestModule {
                 .Change(value =>
                     MobileBridgeProxy.HapticFeedback = value));
         }
-
         options.Add(
             new TextMenu.OnOff(
                 "CENTER CAMERA",
                 Settings.CameraCentering)
             .Change(value =>
                 Settings.CameraCentering = value));
-
-        if (MobileBridgeProxy.Available) {
+        if (MobileBridgeProxy.Available)
+        {
             options.Add(
                 new TextMenu.Button("MOBILE CONTROLS")
                 .Pressed(() =>
                     MobileBridgeProxy.OpenControlsMenu(options)));
         }
-
-        if (MobileMultiplayerProxy.Available) {
+        if (MobileMultiplayerProxy.Available)
+        {
             options.Add(
                 new TextMenu.Button("MULTIPLAYER")
                 .Pressed(() =>
@@ -190,45 +199,40 @@ public sealed class MobileTweaksModule : EverestModule {
                         inGame,
                         snapshot)));
         }
-
         if (!inGame &&
-            MobileBridgeProxy.Available) {
-
+            MobileBridgeProxy.Available)
+        {
             options.Add(new TextMenu.SubHeader("SAVES"));
-
             options.Add(
                 new TextMenu.Button("EXPORT SAVE")
                 .Pressed(MobileBridgeProxy.ExportSave));
-
             options.Add(
                 new TextMenu.Button("LOAD SAVE")
                 .Pressed(MobileBridgeProxy.LoadSave));
         }
-
         // Keep a route to the ordinary Everest Mod Options screen. The mobile
         // suite suppresses only its own sections; unrelated mods remain there.
-        if (!inGame) {
+        if (!inGame)
+        {
             options.Add(new TextMenu.SubHeader("MODS"));
-
             options.Add(
                 new TextMenu.Button("MOD OPTIONS")
-                .Pressed(() => {
-                    if (options.Scene is Overworld overworld) {
+                .Pressed(() =>
+                {
+                    if (options.Scene is Overworld overworld)
+                    {
                         overworld.Goto<OuiModOptions>();
                     }
                 }));
         }
-
         return options;
     }
-
     private static void RemoveOptionButton(
         TextMenu menu,
-        string dialogKey) {
-
+        string dialogKey)
+    {
         string label =
             Dialog.Clean(dialogKey);
-
         TextMenu.Item item =
             menu.Items.FirstOrDefault(candidate =>
                 candidate is TextMenu.Button button &&
@@ -236,80 +240,68 @@ public sealed class MobileTweaksModule : EverestModule {
                     button.Label,
                     label,
                     StringComparison.OrdinalIgnoreCase));
-
-        if (item != null) {
+        if (item != null)
+        {
             menu.Remove(item);
         }
     }
-
     private void OnMainMenuUpdate(
         On.Celeste.OuiMainMenu.orig_Update orig,
-        OuiMainMenu menu) {
-
+        OuiMainMenu menu)
+    {
         orig(menu);
-
         if (menu?.Buttons == null ||
-            menu.Buttons.Count == 0) {
+            menu.Buttons.Count == 0)
+        {
             return;
         }
-
         NormalizeMainMenu(menu);
     }
-
     private void NormalizeMainMenu(
-        OuiMainMenu menu) {
-
+        OuiMainMenu menu)
+    {
         List<MenuButton> buttons = menu.Buttons;
-
         string signature =
             string.Join(
                 "|",
                 buttons.Select(GetButtonKey));
-
-        if (signature == lastMenuSignature) {
+        if (signature == lastMenuSignature)
+        {
             return;
         }
-
         MenuButton climb =
             buttons.FirstOrDefault(button =>
                 button is MainMenuClimb);
-
         MenuButton multiplayer =
             FindButton(
                 buttons,
                 "MOBILEMULTIPLAYER_MAINMENU");
-
         MenuButton mapEditor =
             FindButton(
                 buttons,
                 "BETTERMAPEDITOR_MAINMENU");
-
         MenuButton modManager =
             FindButton(
                 buttons,
                 "MOBILEBRIDGE_MOD_BROWSER");
-
         MenuButton options =
             FindButton(
                 buttons,
                 "menu_options");
-
         MenuButton about =
             FindButton(
                 buttons,
                 "MOBILEBRIDGE_ABOUT_PORT");
-
         List<MenuButton> ordered = new();
         HashSet<MenuButton> used = new();
-
-        void Add(MenuButton button) {
+        void Add(MenuButton button)
+        {
             if (button != null &&
-                used.Add(button)) {
-
+                used.Add(button))
+            {
                 ordered.Add(button);
             }
         }
-
         // Desired mobile main-menu order.
         Add(climb);
         Add(multiplayer);
@@ -317,27 +309,25 @@ public sealed class MobileTweaksModule : EverestModule {
         Add(modManager);
         Add(options);
         Add(about);
-
-        foreach (MenuButton button in buttons.ToArray()) {
-            if (used.Contains(button)) {
+        foreach (MenuButton button in buttons.ToArray())
+        {
+            if (used.Contains(button))
+            {
                 continue;
             }
-
             string key =
                 GetButtonKey(button);
-
             // Move Everest's main-menu Mod Options button under normal
             // Options. Detect it by its public label key instead of referring
             // to Everest's internal MainMenuModOptionsButton class.
             if (string.Equals(
                 key,
                 "menu_modoptions",
-                StringComparison.OrdinalIgnoreCase)) {
-
+                StringComparison.OrdinalIgnoreCase))
+            {
                 button.RemoveSelf();
                 continue;
             }
-
             // The mobile shell intentionally replaces these vanilla bottom
             // entries with its compact six-entry home screen.
             if (string.Equals(
@@ -351,49 +341,42 @@ public sealed class MobileTweaksModule : EverestModule {
                 string.Equals(
                     key,
                     "menu_debug",
-                    StringComparison.OrdinalIgnoreCase)) {
-
+                    StringComparison.OrdinalIgnoreCase))
+            {
                 button.RemoveSelf();
                 continue;
             }
-
             // Keep the mobile home screen within the layout MouseUI targets.
             // Unrelated mod entries remain available through Mod Options.
             button.RemoveSelf();
         }
-
         bool changed =
             ordered.Count != buttons.Count ||
             !ordered.SequenceEqual(buttons);
-
-        if (changed) {
+        if (changed)
+        {
             buttons.Clear();
             buttons.AddRange(ordered);
         }
-
         string layoutMode = "";
-
         if (!string.Equals(
             CoreModule.Settings.MainMenuMode,
             layoutMode,
-            StringComparison.Ordinal)) {
-
+            StringComparison.Ordinal))
+        {
             CoreModule.Settings.MainMenuMode =
                 layoutMode;
         }
-
         menu.UpdateLayout(layoutMode);
-
         lastMenuSignature =
             string.Join(
                 "|",
                 buttons.Select(GetButtonKey));
     }
-
     private static MenuButton FindButton(
         IEnumerable<MenuButton> buttons,
-        string labelName) {
-
+        string labelName)
+    {
         return buttons
             .OfType<MainMenuSmallButton>()
             .FirstOrDefault(button =>
@@ -402,63 +385,56 @@ public sealed class MobileTweaksModule : EverestModule {
                     labelName,
                     StringComparison.OrdinalIgnoreCase));
     }
-
     private static string GetButtonKey(
-        MenuButton button) {
-
-        if (button is MainMenuClimb) {
+        MenuButton button)
+    {
+        if (button is MainMenuClimb)
+        {
             return "$CLIMB";
         }
-
-        if (button is MainMenuSmallButton small) {
+        if (button is MainMenuSmallButton small)
+        {
             return small.LabelName ??
                 small.GetType().FullName ??
                 "$BUTTON";
         }
-
         return button?.GetType().FullName ??
             "$NULL";
     }
-
     private static void OnLevelUpdate(
         On.Celeste.Level.orig_Update orig,
-        Level level) {
-
+        Level level)
+    {
         // Let vanilla update the camera first.
         orig(level);
-
         if (!Settings.CameraCentering ||
             level == null ||
             level.FrozenOrPaused ||
             level.InCutscene ||
             level.SkippingCutscene ||
             level.Transitioning ||
-            level.Wipe != null) {
+            level.Wipe != null)
+        {
             return;
         }
-
         Player player =
             level.Tracker.GetEntity<Player>();
-
         if (player == null ||
             player.Dead ||
             player.StateMachine.State == Player.StDummy ||
-            player.StateMachine.State == Player.StAttract) {
+            player.StateMachine.State == Player.StAttract)
+        {
             return;
         }
-
         Rectangle bounds = level.Bounds;
-
         float maxX =
             Math.Max(
                 bounds.Left,
                 bounds.Right - 320f);
-
         float maxY =
             Math.Max(
                 bounds.Top,
                 bounds.Bottom - 180f);
-
         Vector2 target = new(
             Calc.Clamp(
                 player.Center.X - 160f,
@@ -468,39 +444,35 @@ public sealed class MobileTweaksModule : EverestModule {
                 player.Center.Y - 90f,
                 bounds.Top,
                 maxY));
-
         float smoothing =
             1f - (float)Math.Pow(
                 0.001f,
                 Engine.DeltaTime);
-
         Vector2 position =
             Vector2.Lerp(
                 level.Camera.Position,
                 target,
                 smoothing);
-
-        if (Vector2.DistanceSquared(position, target) < 0.25f) {
+        if (Vector2.DistanceSquared(position, target) < 0.25f)
+        {
             position = target;
         }
-
         // Write after vanilla Level.Update so this is the position actually
         // rendered. Both axes converge toward the player's center, with the
         // same room-boundary clamp as vanilla camera bounds.
         level.Camera.Position = position;
     }
-
-    private static class MobileBridgeProxy {
+    private static class MobileBridgeProxy
+    {
         private static Type moduleType;
         private static bool resolved;
-
-        private static void Resolve() {
-            if (resolved) {
+        private static void Resolve()
+        {
+            if (resolved)
+            {
                 return;
             }
-
             resolved = true;
-
             moduleType =
                 AppDomain.CurrentDomain
                 .GetAssemblies()
@@ -511,15 +483,16 @@ public sealed class MobileTweaksModule : EverestModule {
                 .FirstOrDefault(type =>
                     type != null);
         }
-
-        public static bool Available {
-            get {
+        public static bool Available
+        {
+            get
+            {
                 Resolve();
                 return moduleType != null;
             }
         }
-
-        public static bool HapticFeedback {
+        public static bool HapticFeedback
+        {
             get =>
                 Invoke(
                     "GetHapticFeedback",
@@ -529,69 +502,66 @@ public sealed class MobileTweaksModule : EverestModule {
                     "SetHapticFeedback",
                     value);
         }
-
         public static void OpenControlsMenu(
-            TextMenu parent) {
-
+            TextMenu parent)
+        {
             InvokeVoid(
                 "OpenControlsMenu",
                 parent);
         }
-
-        public static void ExportSave() {
+        public static void ExportSave()
+        {
             InvokeVoid("ExportSave");
         }
-
-        public static void LoadSave() {
+        public static void LoadSave()
+        {
             InvokeVoid("LoadSave");
         }
-
         private static T Invoke<T>(
             string methodName,
             T fallback,
-            params object[] args) {
-
+            params object[] args)
+        {
             Resolve();
-
-            if (moduleType == null) {
+            if (moduleType == null)
+            {
                 return fallback;
             }
-
-            try {
+            try
+            {
                 MethodInfo method =
                     moduleType.GetMethod(
                         methodName,
                         BindingFlags.Public |
                         BindingFlags.Static);
-
-                if (method == null) {
+                if (method == null)
+                {
                     return fallback;
                 }
-
                 object result =
                     method.Invoke(
                         null,
                         args);
-
                 return result is T typed
                     ? typed
                     : fallback;
-            } catch {
+            }
+            catch
+            {
                 return fallback;
             }
         }
-
         private static void InvokeVoid(
             string methodName,
-            params object[] args) {
-
+            params object[] args)
+        {
             Resolve();
-
-            if (moduleType == null) {
+            if (moduleType == null)
+            {
                 return;
             }
-
-            try {
+            try
+            {
                 moduleType
                     .GetMethod(
                         methodName,
@@ -600,22 +570,23 @@ public sealed class MobileTweaksModule : EverestModule {
                     ?.Invoke(
                         null,
                         args);
-            } catch {
+            }
+            catch
+            {
             }
         }
     }
-
-    private static class MobileMultiplayerProxy {
+    private static class MobileMultiplayerProxy
+    {
         private static Type moduleType;
         private static bool resolved;
-
-        private static void Resolve() {
-            if (resolved) {
+        private static void Resolve()
+        {
+            if (resolved)
+            {
                 return;
             }
-
             resolved = true;
-
             moduleType =
                 AppDomain.CurrentDomain
                 .GetAssemblies()
@@ -626,26 +597,26 @@ public sealed class MobileTweaksModule : EverestModule {
                 .FirstOrDefault(type =>
                     type != null);
         }
-
-        public static bool Available {
-            get {
+        public static bool Available
+        {
+            get
+            {
                 Resolve();
                 return moduleType != null;
             }
         }
-
         public static void OpenOptionsMenu(
             TextMenu parent,
             bool inGame,
-            EventInstance snapshot) {
-
+            EventInstance snapshot)
+        {
             Resolve();
-
-            if (moduleType == null) {
+            if (moduleType == null)
+            {
                 return;
             }
-
-            try {
+            try
+            {
                 moduleType
                     .GetMethod(
                         "OpenOptionsMenu",
@@ -658,7 +629,9 @@ public sealed class MobileTweaksModule : EverestModule {
                             inGame,
                             snapshot
                         });
-            } catch (Exception e) {
+            }
+            catch (Exception e)
+            {
                 Logger.Log(
                     LogLevel.Warn,
                     "MobileTweaks",
