@@ -22,7 +22,7 @@ Developed by <a href="https://unlim8ted.com">Unlim8ted Studios</a>
 
 > [!NOTE]
 > **Project status: Active development.**
-> Android startup has reached a visibly rendered Everest screen on the emulator. The latest physical-device texture-loading fix still needs on-device play testing. Feature checkboxes below describe implemented code, not a guarantee that every feature has passed Android end-to-end testing. Multiplayer hosting, map editing, iOS support, and modified-Everest compatibility remain under development.
+> The Android port has been mostly implemented and tested. Multiplayer hosting, map editing, iOS support, and modified-Everest compatibility remain under development.
 
 ## Table of Contents
 
