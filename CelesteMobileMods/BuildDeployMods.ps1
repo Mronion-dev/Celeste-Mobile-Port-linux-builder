@@ -36,6 +36,8 @@
 #   Graphics/...
 #   etc.
 
+param([switch] $RuntimeOnly)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -57,7 +59,7 @@ if (Test-Path -LiteralPath $NestedModsRoot -PathType Container) {
 }
 
 $RuntimeModsDest = Join-Path $RepoRoot "CelesteRuntime\Mods"
-$CecilPath = Join-Path $RepoRoot "tools\WasmMmPatch\Mono.Cecil.dll"
+$CecilPath = Join-Path $RepoRoot "WasmMmPatch\Mono.Cecil.dll"
 $FrameworkRoot = Join-Path $RepoRoot "CelesteRuntime\_framework"
 
 $ContentDirectories = @(
@@ -80,7 +82,7 @@ function Invoke-DotNetBuild {
 
     Write-Host "Building $ProjectPath..." -ForegroundColor Cyan
 
-    & dotnet build $ProjectPath -c Release --nologo -v minimal
+    & dotnet build $ProjectPath -c Release --nologo -v minimal "-p:MobileRuntimeBuild=$($RuntimeOnly.IsPresent.ToString().ToLowerInvariant())"
 
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet build failed for: $ProjectPath"
@@ -425,7 +427,7 @@ $FrameworkAssemblies = Get-FrameworkAssemblyIdentityMap
 # Close Celeste first.
 Write-Host "Checking for running Celeste process..." -ForegroundColor Yellow
 
-$CelesteProc = Get-Process -Name "Celeste" -ErrorAction SilentlyContinue
+$CelesteProc = if (!$RuntimeOnly) { Get-Process -Name "Celeste" -ErrorAction SilentlyContinue } else { $null }
 
 if ($CelesteProc) {
     Write-Host "Closing Celeste..." -ForegroundColor Yellow
@@ -452,7 +454,7 @@ foreach ($mod in $DetectedMods) {
     $deployedZip = Join-Path $ModsDest "$($mod.Name).zip"
     $runtimeZip = Join-Path $RuntimeModsDest "$($mod.Name).zip"
 
-    if (Test-Path -LiteralPath $deployedZip -PathType Leaf) {
+    if (!$RuntimeOnly -and (Test-Path -LiteralPath $deployedZip -PathType Leaf)) {
         Remove-Item -LiteralPath $deployedZip -Force
     }
 
@@ -541,12 +543,13 @@ foreach ($mod in $DetectedMods) {
 
             $DeployPath = Join-Path $ModsDest "$ModName.zip"
 
-            Write-Host "Deploying $ModName.zip to $DeployPath..." -ForegroundColor Yellow
-
-            Copy-Item `
+            if (!$RuntimeOnly) {
+                Write-Host "Deploying $ModName.zip to $DeployPath..." -ForegroundColor Yellow
+                Copy-Item `
                 -LiteralPath $ZipPath `
                 -Destination $DeployPath `
                 -Force
+            }
 
             $RuntimeDeployPath = Join-Path $RuntimeModsDest "$ModName.zip"
 
@@ -584,8 +587,10 @@ if ($Failures.Count -gt 0) {
 }
 
 Write-Host "`nAll detected workspace mods built, packaged, and deployed successfully!" -ForegroundColor Green
+if ($RuntimeOnly) { return }
 Write-Host "Restarting Celeste..." -ForegroundColor Yellow
 
 Start-Process `
     -FilePath $CelesteExe `
+    -WindowStyle Hidden `
     -WorkingDirectory $CelestePath

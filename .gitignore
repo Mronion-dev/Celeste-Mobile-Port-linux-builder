@@ -179,6 +179,7 @@ data.data
 # ------------------------------------------------------------
 *.log
 *.bak
+*.bak-*
 *.backup
 *.orig
 *.rej
@@ -237,3 +238,13 @@ downloads/
 # local-only reference copies
 # ------------------------------------------------------------
 reference/
+
+# Generated fingerprints; refreshed from the private runtime for each public build.
+AndroidWrapper/app/src/main/assets/game-files.tsv
+AndroidWrapper/app/src/main/assets/owned-game-encrypted/
+
+# Generated iOS assets, project and build products
+IOSWrapper/assets/
+IOSWrapper/Generated/
+IOSWrapper/*.xcodeproj/
+IOSWrapper/build/

@@ -1,0 +1,68 @@
+<!doctype html><body class="game-rendered"><canvas></canvas>
+<!-- BRIDGE -->
+<script src="../CelesteRuntime/touch-controls.js"></script>
+<script src="../CelesteRuntime/mod-manager.js"></script>
+<script>
+(async () => {try {
+  const events = [];
+  for (const type of ['keydown','keyup']) document.addEventListener(type, e => events.push(`${type}:${e.code}:${e.keyCode}`));
+  const find = name => document.querySelector(`[data-control="${name}"]`);
+  const send = (name,type,id) => { const button=find(name); button.setPointerCapture=()=>{}; button.dispatchEvent(new PointerEvent(type,{pointerId:id,bubbles:true,cancelable:true,clientX:10,clientY:10})); };
+  const check = (value,message) => {if(!value)throw Error(message);};
+  const overlay=document.querySelector('#celeste-touch-controls');
+  check(getComputedStyle(overlay).display === 'none','must be hidden in menus');
+  check(document.querySelector('.touch-tools').hidden,'Controls shortcut hidden by default');
+  dispatchEvent(new CustomEvent('celeste-option-changed',{detail:{key:'pause_only',value:'true'}}));
+  check(getComputedStyle(overlay).display==='block' && !find('pause').hidden && find('jump').hidden,'cinematic pause-only controls');
+  dispatchEvent(new CustomEvent('celeste-option-changed',{detail:{key:'pause_only',value:'false'}}));
+  window.celesteAndroidSetGameplay(true);
+  check(getComputedStyle(overlay).display === 'block','overlay not visible in gameplay');
+  check(getComputedStyle(find('up')).display==='none','arrows hidden in joystick mode');
+  check(!find('confirm') && find('crouch-dash'),'crouch dash replaces confirm');
+  send('jump','pointerdown',1); send('dash','pointerdown',2); send('grab','pointerdown',3);
+  check(events.join(',') === 'keydown:KeyC:67,keydown:KeyX:88,keydown:KeyZ:90','simultaneous presses');
+  send('jump','pointerup',1);
+  check(events.at(-1)==='keyup:KeyC:67','independent release');
+  send('dash','pointercancel',2);
+  check(events.at(-1)==='keyup:KeyX:88','cancel release');
+  dispatchEvent(new Event('blur'));
+  check(events.at(-1)==='keyup:KeyZ:90','blur release');
+  send('crouch-dash','pointerdown',8);send('crouch-dash','pointerup',8);
+  check(events.at(-1)==='keyup:KeyV:86','crouch dash binding');
+  const option=(name,value)=>{const input=document.querySelector(`[data-option="${name}"]`);input.checked=value;input.dispatchEvent(new Event('change'));};
+  option('enabled',false);check(getComputedStyle(find('jump')).display==='none','show toggle hides controls');
+  option('enabled',true);option('joystick',false);
+  check(getComputedStyle(find('stick')).display==='none' && getComputedStyle(find('up')).display!=='none','arrow mode');
+  option('joystick',true);
+  const stick=find('stick'), rect=stick.getBoundingClientRect();
+  stick.dispatchEvent(new PointerEvent('pointerdown',{pointerId:9,bubbles:true,clientX:rect.left+rect.width*.9,clientY:rect.top+rect.height*.6}));
+  check(stick.querySelector('.stick-knob').style.top==='50%','visual snapping aligns with input');
+  send('stick','pointerup',9);
+  // Interactive cutscenes restore gameplay input even with the game clock frozen.
+  stick.dispatchEvent(new PointerEvent('pointerdown',{pointerId:19,bubbles:true,clientX:rect.left+rect.width*.9,clientY:rect.top+rect.height*.1}));
+  send('dash','pointerdown',20);
+  check(events.slice(-3).join(',')==='keydown:ArrowRight:39,keydown:ArrowUp:38,keydown:KeyX:88','prologue up-right plus dash');
+  send('dash','pointerup',20);send('stick','pointerup',19);
+  const count=events.length;
+  dispatchEvent(new Event('celeste-open-layout-editor')); send('jump','pointerdown',4); send('jump','pointerup',4);
+  check(events.length===count,'editing must not send game input');
+  check(localStorage.getItem('celeste.touch.layout.v1')!==null,'layout persisted');
+  document.querySelector('input[type=range]').value='120';document.querySelector('input[type=range]').dispatchEvent(new Event('input'));
+  document.querySelector('[data-reset]').click();check(find('jump').style.width==='72px','reset restores size');
+  document.querySelector('[data-done]').click();
+  window.celesteAndroidSetGameplay(false);option('always',true);
+  check(getComputedStyle(overlay).display==='block','always on in menus');option('always',false);
+  const canvas=document.querySelector('canvas');canvas.style.cssText='position:fixed;inset:0;width:960px;height:540px';
+  const pointer=(type,y)=>canvas.dispatchEvent(new PointerEvent(type,{pointerId:12,bubbles:true,clientX:450,clientY:y}));
+  pointer('pointerdown',300);pointer('pointermove',260);pointer('pointerup',260);
+  check(window.celesteAndroidConsumeTouchScroll()===-80,'finger scrolling is scaled to game coordinates');
+  check(!window.celesteAndroidConsumeTouchTap(),'scroll does not click');
+  window.celesteListInstalledMods=async()=>[{name:'test.zip',enabled:true}];
+  window.celesteSetModEnabled=async()=>true;
+  await window.celesteOpenModManager();check(document.querySelector('dialog').open,'mod manager opens');
+  document.querySelector('dialog').close();
+  document.body.classList.remove('game-rendered');
+  check(getComputedStyle(document.querySelector('#celeste-touch-controls')).display==='none','hidden before rendering');
+  document.body.insertAdjacentHTML('beforeend','<pre id="test-result">PASS: controls, visibility, toggles, reset, snapping, scrolling, mod manager</pre>');
+} catch(error) {document.body.insertAdjacentHTML('beforeend','<pre id="test-result">FAIL: '+error.message+'</pre>');}})();
+</script>

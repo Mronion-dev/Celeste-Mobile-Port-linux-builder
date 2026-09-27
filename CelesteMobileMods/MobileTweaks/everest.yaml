@@ -1,5 +1,5 @@
 - Name: MobileTweaks
-  Version: 1.0.0
+  Version: 1.0.1
   DLL: MobileTweaks.dll
   Dependencies:
     - Name: EverestCore

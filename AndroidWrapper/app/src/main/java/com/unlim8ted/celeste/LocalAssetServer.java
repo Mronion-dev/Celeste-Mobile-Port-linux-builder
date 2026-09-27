@@ -10,6 +10,8 @@ import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -31,6 +33,7 @@ final class LocalAssetServer {
     private Thread acceptThread;
     private final AssetManager assets;
     private final String root;
+    private final File ownedFiles;
     private final NativeBridge nativeBridge;
     private volatile boolean running;
     private ServerSocket server;
@@ -39,6 +42,7 @@ final class LocalAssetServer {
     LocalAssetServer(Context context, String root, NativeBridge nativeBridge) {
         this.assets = context.getAssets();
         this.root = root;
+        this.ownedFiles = new File(context.getFilesDir(), "owned-game");
         this.nativeBridge = nativeBridge;
     }
 
@@ -145,6 +149,11 @@ final class LocalAssetServer {
     private AssetResponse openAsset(String path) throws IOException {
         if ("__invalid__".equals(path)) {
             return null;
+        }
+        if (BuildConfig.PUBLIC_PACKAGE && (path.startsWith("celeste/") || path.equals("_framework/data/data.data"))) {
+            File file = new File(ownedFiles, path);
+            if (!file.getCanonicalPath().startsWith(ownedFiles.getCanonicalPath() + File.separator) || !file.isFile()) return null;
+            return new AssetResponse(new BufferedInputStream(new FileInputStream(file)), file.length(), mimeType(path));
         }
         AssetResponse chunkedWasm = openChunkedWasm(path);
         if (chunkedWasm != null) {

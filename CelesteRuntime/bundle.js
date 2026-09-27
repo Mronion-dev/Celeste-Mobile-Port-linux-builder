@@ -3212,7 +3212,7 @@ function FSExplorer() {
   this.mount = async () => {
     await window.initPromise;
     this.fs = window.FS;
-    this.listing = this.fs.readdir(this.exists);
+    this.listing = this.fs.readdir(this.path);
   };
   this.css = `
 		width: 100%;
@@ -3314,7 +3314,7 @@ function FSExplorer() {
     `;
   return /* @__PURE__ */ h("div", null, /* @__PURE__ */ h("div", { id: "path" }, use(this.path, (path) => path == "/" ? "File Browser" : path)), /* @__PURE__ */ h("div", { id: "listing" }, use(this.listing, (r) => r.map((r2) => {
     let mode = this.fs.stat(this.path + r2).mode;
-    if (this.fs.isDir(mode)) {
+    if ((mode & 0xf000) === 0x4000) {
       return /* @__PURE__ */ h("div", {
         class: "item flex vcenter space-between", role: "button", "on:click": () => {
           if (r2 == ".") {
@@ -4660,7 +4660,7 @@ function bootStatus(message) {
   const text = "Initializing: " + message;
   console.warn("[android-port] " + message);
   if (typeof window.celesteSetBootStatus === "function") {
-    window.celesteSetBootStatus(text, message);
+    window.celesteSetBootStatus(text);
   }
   const progressSteps = {
     "creating dotnet runtime": 8,
@@ -4792,6 +4792,8 @@ async function initOnce() {
     encryptrsa: () => new Uint8Array(0)
   });
   setModuleImports("android-port.js", {
+    celesteAndroidConsumeOptions: () => String(globalThis.celesteAndroidConsumeOptions?.() ?? ""),
+    celesteAndroidSetGameplay: (gameplay) => globalThis.celesteAndroidSetGameplay?.(gameplay),
     celesteAndroidHaptic: (strength, length) => globalThis.celesteAndroidHaptic?.(strength, length),
     celesteAndroidOpenUrl: (url) => globalThis.celesteAndroidOpenUrl?.(url),
     celesteAndroidOpenModBrowser: () => globalThis.celesteAndroidOpenModBrowser?.(),
@@ -5014,6 +5016,7 @@ async function start(canvas) {
   } catch (err) {
     const detail = err && (err.stack || err.message || String(err)) || "unknown error";
     console.error(`[android-port] Start FAILED: ${detail}`);
+    window.celesteSetBootStatus?.("Startup failed: " + (err?.message || detail.split("\n")[0]), true);
     if (err && err.stack) console.error(`[android-port] Stack trace: ${err.stack}`);
 
     if (dotnet.instance && dotnet.instance.Module && dotnet.instance.Module.ENV) {
@@ -5286,7 +5289,7 @@ async function persistRuntimeDir(path) {
     if (name === "." || name === "..") continue;
     const fullPath = `${path}/${name}`;
     try {
-      if (FS.isDir?.(FS.stat(fullPath).mode)) continue;
+      if ((FS.stat(fullPath).mode & 0xf000) === 0x4000) continue;
       files[name] = FS.readFile(fullPath);
     } catch {
     }
@@ -5451,21 +5454,31 @@ async function installBundledMods() {
         continue;
       }
       const data = new Uint8Array(await response.arrayBuffer());
-      const existing = FS.analyzePath(modPath).exists ? FS.readFile(modPath) : null;
-      let changed = !existing || existing.length !== data.length;
-      if (!changed && existing) {
-        for (let i = 0; i < data.length; i++) {
-          if (existing[i] !== data[i]) {
-            changed = true;
-            break;
-          }
+      const files = await new Promise((resolve, reject) => unzip(data, (error, entries) => error ? reject(error) : resolve(entries)));
+      const name = mod.slice(0, -4);
+      if (!files["everest.yaml"] || !files[`${name}.dll`]) throw new Error(`Incomplete bundled mod ${mod}`);
+      // Everest supports unpacked mods. Avoid its WASM ZipArchive stream path;
+      // all DLLs stay at the mod root, never under bin.
+      for (const entry of Object.keys(files)) {
+        const parts = entry.replace(/\/$/, "").split("/");
+        if (entry.includes("\\") || parts.some(p => !p || p === "." || p === ".." || p.toLowerCase() === "bin")) {
+          throw new Error(`Unsafe bundled mod path: ${entry}`);
         }
       }
-      if (changed) {
-        FS.writeFile(modPath, data);
-        installedAny = true;
-        console.info(`Installed bundled ${mod}`);
+      const directory = `/libsdl/Celeste/Mods/${name}`;
+      // Older persistence code used optional FS.isDir (absent in WasmFS),
+      // which serialized these packaged folders as files. Repair only core mods.
+      if (FS.analyzePath(directory).exists && (FS.stat(directory).mode & 0xf000) !== 0x4000) FS.unlink(directory);
+      mkdirp(directory);
+      for (const [entry, bytes] of Object.entries(files)) {
+        if (entry.endsWith("/")) continue;
+        const destination = `${directory}/${entry}`;
+        mkdirp(destination.slice(0, destination.lastIndexOf("/")));
+        FS.writeFile(destination, bytes);
       }
+      if (FS.analyzePath(modPath).exists) FS.unlink(modPath);
+      installedAny = true;
+      console.info(`Installed unpacked bundled ${name}`);
       const disabled = `${modPath}.disabled`;
       if (FS.analyzePath(disabled).exists) {
         FS.unlink(disabled);
@@ -5480,6 +5493,7 @@ async function installBundledMods() {
     }
   } catch (err) {
     console.error("Failed to install bundled mods", err);
+    throw err;
   }
 }
 window.celesteInstallBundledMods = installBundledMods;

@@ -8,6 +8,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>bin</OutputPath>
+    <DefineConstants Condition="'$(MobileRuntimeBuild)' == 'true'">$(DefineConstants);BROWSER</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

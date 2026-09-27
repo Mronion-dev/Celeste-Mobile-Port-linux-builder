@@ -39,3 +39,34 @@ and Core flags `3` (`STREAM_FROM_UPDATE | MIX_FROM_UPDATE`) complete initializat
 without those extra threads. The optional `processors=1` query remains available
 for comparisons; production does not change the CPU count. This is a startup
 probe, not an audio quality or complete-game test.
+# Release and ownership checks
+
+Run `node tests/run-ui-tests.cjs` (Chrome required; set `CHROME` to override its path).
+It loads the actual bridge and controls without .NET or Celeste, checking gameplay
+visibility, cinematic pause-only mode, hidden Controls shortcut, show/always-on toggles, reset, crouch dash, visible snapping, simultaneous
+keys, cancellation, layout persistence, finger scrolling and Mod Manager.
+
+`node tests/test-bundled-mods.cjs` extracts the actual bundled core mod ZIPs
+through the runtime's decompressor, checks stale ZIP replacement and phone
+dialogue, and rejects unsafe paths without starting workers or the game.
+
+`python -m unittest discover -s tests -p test_release_parts.py` checks authenticated
+file-key decryption, APK reassembly, wrong keys, reordered/missing/corrupted parts,
+metadata tampering and the strict 100 MB upload limit. Install `cryptography` first.
+
+`dotnet run --project tests/ModStartupProbe -- . <public-apk>` verifies that the
+MobileTweaks DLL calls its existing welcome skip before its startup/menu hooks,
+then compares all three core DLLs against the ZIPs actually embedded in the APK.
+
+These checks isolate the import, packaging and welcome-screen
+paths without starting Celeste:
+
+```powershell
+javac -d tools/import-probe AndroidWrapper/app/src/main/java/com/unlim8ted/celeste/GameFiles.java tests/GameFilesProbe.java
+java -cp tools/import-probe com.unlim8ted.celeste.GameFilesProbe
+dotnet run --project tests/TextureLoadingProbe -- .
+```
+
+`python -m unittest discover -s tests -p test_ownership.py` checks import packaging and skips account-service tests when the optional service source is absent.
+
+`dotnet run --project tests/PostcardInputProbe` exercises the actual coroutine input wrapper without loading the game: external ownership, confirmation, nested yields, delays, disposal and exception cleanup. The browser probe also checks simultaneous up-right + Dash for the prologue.

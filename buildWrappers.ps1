@@ -1,7 +1,8 @@
 param(
     [ValidateSet("Android", "IOS", "All")]
     [string] $Target = "All",
-    [switch] $NoBuild
+    [switch] $NoBuild,
+    [string] $PublicApk
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +11,13 @@ $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RuntimeSource = Join-Path $RepoRoot "CelesteRuntime"
 $AndroidRuntimeDest = Join-Path $RepoRoot "AndroidWrapper\app\src\main\assets\CelesteRuntime"
 $IOSRuntimeDest = Join-Path $RepoRoot "IOSWrapper\assets\CelesteRuntime"
+
+function Assert-StagingPath([string] $Destination) {
+    $Resolved = [IO.Path]::GetFullPath($Destination)
+    if ($Resolved -notin @([IO.Path]::GetFullPath($AndroidRuntimeDest), [IO.Path]::GetFullPath($IOSRuntimeDest))) {
+        throw "Refusing to change a path outside the wrapper staging directories: $Resolved"
+    }
+}
 
 function Copy-Runtime {
     param(
@@ -21,6 +29,7 @@ function Copy-Runtime {
         throw "Missing runtime folder: $RuntimeSource"
     }
 
+    Assert-StagingPath $Destination
     $DestinationParent = Split-Path -Parent $Destination
     New-Item -ItemType Directory -Force -Path $DestinationParent | Out-Null
 
@@ -28,7 +37,15 @@ function Copy-Runtime {
         Remove-Item -LiteralPath $Destination -Recurse -Force
     }
 
-    Copy-Item -LiteralPath $RuntimeSource -Destination $Destination -Recurse -Force
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    Get-ChildItem -LiteralPath $RuntimeSource -Recurse -File | Where-Object {
+        $_.Name -notmatch '\.(bak.*|tmp|log|pdb)$' -and $_.FullName -notmatch '[\\/](bin|obj)[\\/]'
+    } | ForEach-Object {
+        $Relative = $_.FullName.Substring($RuntimeSource.Length + 1)
+        $TargetFile = Join-Path $Destination $Relative
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $TargetFile) | Out-Null
+        Copy-Item -LiteralPath $_.FullName -Destination $TargetFile
+    }
     Write-Host "Staged CelesteRuntime -> $Destination"
 }
 
@@ -38,6 +55,7 @@ function Remove-StagedRuntime {
         [string] $Destination
     )
 
+    Assert-StagingPath $Destination
     if (Test-Path -LiteralPath $Destination) {
         Remove-Item -LiteralPath $Destination -Recurse -Force
         Write-Host "Removed staged CelesteRuntime from $Destination"
@@ -45,13 +63,12 @@ function Remove-StagedRuntime {
 }
 
 function Build-Android {
-    try {
+    if ($NoBuild) {
         Copy-Runtime -Destination $AndroidRuntimeDest
-
-        if ($NoBuild) {
-            return
-        }
-
+        return
+    }
+    try {
+        # Gradle stages the runtime itself; avoid a redundant full copy.
         $Gradle = Join-Path $RepoRoot "AndroidWrapper\gradlew.bat"
         if (-not (Test-Path -LiteralPath $Gradle -PathType Leaf)) {
             throw "Missing Android Gradle wrapper: $Gradle"
@@ -72,45 +89,20 @@ function Build-Android {
 }
 
 function Build-IOS {
-    try {
-        Copy-Runtime -Destination $IOSRuntimeDest
-
-        if ($NoBuild) {
-            return
-        }
-
-        $IOSRoot = Join-Path $RepoRoot "IOSWrapper"
-        $Workspace = Get-ChildItem -LiteralPath $IOSRoot -Filter "*.xcworkspace" -ErrorAction SilentlyContinue | Select-Object -First 1
-        $Project = Get-ChildItem -LiteralPath $IOSRoot -Filter "*.xcodeproj" -ErrorAction SilentlyContinue | Select-Object -First 1
-
-        if ($null -eq $Workspace -and $null -eq $Project) {
-            Write-Warning "No iOS Xcode workspace or project found under IOSWrapper. Runtime staging completed; skipping iOS build."
-            return
-        }
-
-        $XcodeBuild = Get-Command xcodebuild -ErrorAction SilentlyContinue
-        if ($null -eq $XcodeBuild) {
-            Write-Warning "xcodebuild is not available on this machine. Runtime staging completed; skipping iOS build."
-            return
-        }
-
-        Push-Location $IOSRoot
-        try {
-            if ($null -ne $Workspace) {
-                & xcodebuild -workspace $Workspace.Name -scheme "Celeste" -configuration Debug build
-            } else {
-                & xcodebuild -project $Project.Name -scheme "Celeste" -configuration Debug build
-            }
-
-            if ($LASTEXITCODE -ne 0) {
-                throw "iOS wrapper build failed with exit code $LASTEXITCODE"
-            }
-        } finally {
-            Pop-Location
-        }
-    } finally {
-        Remove-StagedRuntime -Destination $IOSRuntimeDest
+    $IOSRoot = Join-Path $RepoRoot "IOSWrapper"
+    if ($PublicApk) {
+        & python (Join-Path $IOSRoot "stage-assets.py") --apk $PublicApk
+        if ($LASTEXITCODE -ne 0) { throw "Public iOS asset staging failed" }
     }
+    if ($NoBuild) {
+        if (-not $PublicApk) { throw "iOS staging requires -PublicApk pointing to the encrypted public APK" }
+        return
+    }
+    if (-not (Get-Command xcodebuild -ErrorAction SilentlyContinue)) {
+        throw "iOS source is in IOSWrapper. No IPA was built: macOS and Xcode are required. On a Mac run bash IOSWrapper/build.sh simulator (or device with signing configured)."
+    }
+    & bash (Join-Path $IOSRoot "build.sh") simulator
+    if ($LASTEXITCODE -ne 0) { throw "iOS build failed" }
 }
 
 switch ($Target) {

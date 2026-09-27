@@ -1,0 +1,14 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const {spawnSync} = require('node:child_process');
+const index = fs.readFileSync(path.join(__dirname,'../CelesteRuntime/index.html'),'utf8');
+const bridge = index.match(/<script>([\s\S]*?)<\/script>/)[1];
+const test = fs.readFileSync(path.join(__dirname,'touch-controls.html'),'utf8').replace('<!-- BRIDGE -->',`<script>localStorage.clear();${bridge}</script>`);
+const file = path.join(__dirname,'.runtime-ui-probe.html');
+fs.writeFileSync(file,test);
+const chrome = process.env.CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
+const result=spawnSync(chrome,['--headless=new','--disable-gpu','--no-first-run','--user-data-dir=F:/CelestePort-Agent-Test/chrome-controls','--virtual-time-budget=1500','--dump-dom','file:///'+file.replaceAll('\\','/')],{encoding:'utf8',timeout:45000,windowsHide:true,maxBuffer:2e6});
+const match=result.stdout?.match(/<pre id="test-result">([^<]+)/);
+console.log(match?.[1] || result.error || result.stderr);
+fs.unlinkSync(file);
+if(!match?.[1].startsWith('PASS:'))process.exitCode=1;

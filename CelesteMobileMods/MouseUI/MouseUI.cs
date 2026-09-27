@@ -38,6 +38,8 @@ public sealed class MouseUIModule : EverestModule {
         On.Celeste.OuiJournal.Update += OnJournalUpdate;
         On.Celeste.OuiTitleScreen.Update += OnTitleScreenUpdate;
         On.Celeste.OuiCredits.Update += OnCreditsUpdate;
+        On.Celeste.OuiAssistMode.Update += OnAssistModeUpdate;
+        On.Celeste.Postcard.DisplayRoutine += OnPostcardDisplayRoutine;
         On.Celeste.Pico8.Emulator.btn += OnPico8Button;
         On.Monocle.Engine.Update += OnEngineUpdate;
         On.Monocle.MInput.Update += OnMInputUpdate;
@@ -55,6 +57,8 @@ public sealed class MouseUIModule : EverestModule {
         On.Celeste.OuiJournal.Update -= OnJournalUpdate;
         On.Celeste.OuiTitleScreen.Update -= OnTitleScreenUpdate;
         On.Celeste.OuiCredits.Update -= OnCreditsUpdate;
+        On.Celeste.OuiAssistMode.Update -= OnAssistModeUpdate;
+        On.Celeste.Postcard.DisplayRoutine -= OnPostcardDisplayRoutine;
         On.Celeste.Pico8.Emulator.btn -= OnPico8Button;
         On.Monocle.Engine.Update -= OnEngineUpdate;
         On.Monocle.MInput.Update -= OnMInputUpdate;
@@ -74,6 +78,68 @@ public sealed class MouseUIModule : EverestModule {
     }
 
     private static bool UsingTouch => OptionalMobileBridge.TouchAvailable;
+
+    private sealed class PointerPress : VirtualButton.Node {
+        public override bool Check => true;
+        public override bool Pressed => true;
+        public override bool Released => false;
+    }
+
+    private static IEnumerator OnPostcardDisplayRoutine(On.Celeste.Postcard.orig_DisplayRoutine orig, Postcard postcard) {
+        // DisplayRoutine is advanced by its caller, not by Postcard.Update.
+        // Scope the input to the actual MoveNext that reads MenuConfirm.Pressed.
+        return new ScopedInputRoutine(orig(postcard), () =>
+            postcard.Visible && ConsumePointerTap() ? new ConfirmPulse() : null);
+    }
+
+    private sealed class ConfirmPulse : IDisposable {
+        private readonly PointerPress pulse = new();
+        private readonly bool disabled = MInput.Disabled;
+        public ConfirmPulse() {
+            Input.MenuConfirm.Nodes.Add(pulse);
+            MInput.Disabled = false;
+        }
+        public void Dispose() {
+            Input.MenuConfirm.Nodes.Remove(pulse);
+            Input.MenuConfirm.ConsumeBuffer();
+            MInput.Disabled = disabled;
+        }
+    }
+
+    private static void OnAssistModeUpdate(On.Celeste.OuiAssistMode.orig_Update orig, OuiAssistMode menu) {
+        VirtualButton pressed = null;
+        if (menu.Focused && menu.Visible && ConsumePointerTap()) {
+            Vector2 pointer = PointerPosition();
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var type = typeof(OuiAssistMode);
+            int count = (type.GetField("pages", flags)?.GetValue(menu) as ICollection)?.Count ?? 0;
+            float question = (float)(type.GetField("questionEase", flags)?.GetValue(menu) ?? 0f);
+            if (IsBackButton(pointer)) pressed = Input.MenuCancel;
+            else if (count > 0 && Math.Abs(pointer.Y - 920f) < 80f) {
+                float offset = GFX.Gui["dot"].Width * (count + 1) / 2f + 50f;
+                if (Math.Abs(pointer.X - (960f-offset)) < 80f) pressed = Input.MenuLeft;
+                else if (Math.Abs(pointer.X - (960f+offset)) < 80f) pressed = Input.MenuRight;
+            } else if (question > .9f && Math.Abs(pointer.X-960f) < 360f) {
+                float yesY = 620f + ActiveFont.LineHeight * 1.4f + 10f;
+                float noY = 620f + ActiveFont.LineHeight * 2.2f + 20f;
+                int choice = Math.Abs(pointer.Y-yesY-ActiveFont.LineHeight*.4f) < ActiveFont.LineHeight*.5f ? 0 :
+                    Math.Abs(pointer.Y-noY-ActiveFont.LineHeight*.4f) < ActiveFont.LineHeight*.5f ? 1 : -1;
+                if (choice >= 0) {
+                    type.GetField("questionIndex", flags)?.SetValue(menu, choice);
+                    pressed = Input.MenuConfirm;
+                }
+            }
+        }
+        if (pressed == null) { orig(menu); return; }
+        // Feed the game's own coroutine so its animations, save flags and return
+        // navigation remain identical to keyboard/controller confirmation.
+        var pulse = new PointerPress();
+        bool disabled = MInput.Disabled;
+        pressed.Nodes.Add(pulse);
+        MInput.Disabled = false;
+        try { orig(menu); }
+        finally { pressed.Nodes.Remove(pulse); pressed.ConsumeBuffer(); MInput.Disabled = disabled; }
+    }
 
     private static void OnEngineUpdate(On.Monocle.Engine.orig_Update orig, Engine engine, GameTime gameTime) {
         backPromptVisibleForInput = backPromptVisibleThisRender;
@@ -636,11 +702,31 @@ public sealed class MouseUIModule : EverestModule {
         for (int i = 0; i < icons.Count; i++) {
             OuiChapterSelectIcon icon = icons[i];
             if (icon != null &&
-                icon.Area <= SaveData.Instance.UnlockedAreas &&
+                (icon.Area <= SaveData.Instance.UnlockedAreas || icon.AssistModeUnlockable) &&
                 Vector2.Distance(pointer, icon.Position) < 120f) {
 
                 if (SaveData.Instance.LastArea.ID != i) {
                     MoveChapterSelectionTo(chapterSelect, icons, i);
+                    return;
+                }
+
+                if (icon.AssistModeUnlockable) {
+                    Audio.Play("event:/ui/world_map/icon/assist_skip");
+                    chapterSelect.Focused = false;
+                    chapterSelect.Overworld.ShowInputUI = false;
+                    int selected = i;
+                    icon.AssistModeUnlock(() => {
+                        chapterSelect.Focused = true;
+                        chapterSelect.Overworld.ShowInputUI = true;
+                        chapterSelect.GetType().GetMethod("EaseCamera", BindingFlags.NonPublic | BindingFlags.Instance)?.Invoke(chapterSelect, null);
+                        if (icon.Area == 10) SaveData.Instance.RevealedChapter9 = true;
+                        if (icon.Area < SaveData.Instance.MaxAssistArea && selected + 1 < icons.Count) {
+                            var next = icons[selected + 1];
+                            next.AssistModeUnlockable = true;
+                            next.Position = next.HiddenPosition;
+                            next.Show();
+                        }
+                    });
                     return;
                 }
 
@@ -664,6 +750,7 @@ public sealed class MouseUIModule : EverestModule {
 
         int direction = Math.Sign(target - previous);
         SaveData.Instance.LastArea.ID = target;
+        chapterSelect.GetType().GetProperty("area", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(chapterSelect, target);
         icons[target]?.Hovered(direction);
 
         chapterSelect.GetType()
@@ -1021,7 +1108,7 @@ public sealed class MouseUIModule : EverestModule {
 
         float scroll = ConsumePointerScroll();
         if (UsingTouch) {
-            if (Math.Abs(scroll) > 34f) {
+            if (Math.Abs(scroll) > 0f) {
                 ScrollTextMenu(menu, scroll);
             }
         } else {
@@ -1038,18 +1125,22 @@ public sealed class MouseUIModule : EverestModule {
             hoveredTextMenuItem < menu.Items.Count) {
 
             TextMenu.Item item = menu.Items[hoveredTextMenuItem];
-            if (item == null || !item.Visible || !item.Hoverable) {
+            if (item == null || !item.Visible || !item.Hoverable || item.Disabled) {
                 return;
             }
 
-            item.ConfirmPressed();
-            item.OnPressed?.Invoke();
-
-            if (pointer.X > origin.X + menu.Width - 160f) {
+            bool option = false;
+            for (Type type = item.GetType(); type != null; type = type.BaseType) {
+                if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(TextMenu.Option<>)) { option = true; break; }
+            }
+            if (option && pointer.X > origin.X + menu.Width - 160f) {
                 item.RightPressed();
-            } else if (pointer.X > origin.X + menu.Width - 320f &&
+            } else if (option && pointer.X > origin.X + menu.Width - 320f &&
                        pointer.X < origin.X + menu.Width - 160f) {
                 item.LeftPressed();
+            } else {
+                item.ConfirmPressed();
+                item.OnPressed?.Invoke();
             }
             return;
         }

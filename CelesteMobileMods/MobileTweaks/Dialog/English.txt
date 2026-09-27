@@ -1,0 +1,4 @@
+# Mobile wording for the PC runtime's autosave notice.
+AUTOSAVING_DESC_PC=
+    Please do not turn off your phone
+    while this icon is visible

@@ -2,6 +2,21 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 
 var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+if (args.Contains("--mod-rules")) {
+    var target = Path.Combine(root, "CelesteRuntime/_framework/Celeste.Wasm.mm.ubh2gjnetc.dll");
+    using var rules = ModuleDefinition.ReadModule(target, new ReaderParameters { InMemory = true });
+    RewriteInitMMFlags(rules);
+    rules.Write(target + ".tmp");
+    File.Copy(target + ".tmp", target, true);
+    File.Delete(target + ".tmp");
+    Console.WriteLine("Kept game-only WASM patches out of the already ported mobile mods");
+    return;
+}
+if (args.Contains("--skip-welcome")) {
+    foreach (var path in new[] { "celeste/Celeste.dll", "celeste/Celeste.Mod.mm.dll", "celeste/Everest/Celeste.Mod.mm.dll" })
+        PatchWelcome(Path.Combine(root, "CelesteRuntime", path));
+    return;
+}
 if (args.Contains("--audio-threads")) {
     foreach (var path in new[] { "celeste/Celeste.dll", "celeste/Celeste.Mod.mm.dll", "celeste/Everest/Celeste.Mod.mm.dll" })
         PatchAudioWasmThreads(Path.Combine(root, "CelesteRuntime", path));
@@ -78,6 +93,7 @@ foreach (var relativePath in new[] {
     PatchCelesteWasmThreadStarts(Path.Combine(root, relativePath));
     PatchAudioWasmThreads(Path.Combine(root, relativePath));
     PatchTextureLoadingThreads(Path.Combine(root, relativePath));
+    PatchWelcome(Path.Combine(root, relativePath));
 }
 
 Console.WriteLine("Patched Celeste WASM game thread starts");
@@ -92,6 +108,25 @@ foreach (var relativePath in new[] {
 }
 
 Console.WriteLine("Patched Everest worker task scheduler");
+
+static void PatchWelcome(string target) {
+    using var resolver = new DefaultAssemblyResolver();
+    resolver.AddSearchDirectory(Path.GetDirectoryName(target)!);
+    resolver.AddSearchDirectory(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(target)!, "..")));
+    resolver.AddSearchDirectory(Path.Combine(Path.GetDirectoryName(target)!, "Everest"));
+    using var module = ModuleDefinition.ReadModule(target, new ReaderParameters { InMemory = true, AssemblyResolver = resolver });
+    var method = module.GetType("Celeste.Mod.UI.OuiOOBE")?.Methods.SingleOrDefault(m => m.Name == "IsStart");
+    if (method == null || !method.HasBody || method.ReturnType.MetadataType != MetadataType.Boolean)
+        throw new InvalidOperationException("Unsupported Everest welcome screen: " + target);
+    if (method.Body.Instructions.Count == 2 && method.Body.Instructions[0].OpCode == OpCodes.Ldc_I4_0) return;
+    // Suppress automatic onboarding only. Its Mod Options entry remains usable.
+    ReplaceWithReturn(method);
+    method.Body.Instructions.Insert(0, Instruction.Create(OpCodes.Ldc_I4_0));
+    module.Write(target + ".tmp");
+    File.Copy(target + ".tmp", target, overwrite: true);
+    File.Delete(target + ".tmp");
+    Console.WriteLine("Skipped automatic Everest welcome screen: " + target);
+}
 
 static void PatchTextureLoadingThreads(string target) {
     using var resolver = new DefaultAssemblyResolver();
@@ -243,7 +278,6 @@ static void RewriteInitMMFlags(ModuleDefinition module) {
 
     var originalOperands = method.Body.Instructions.Select(i => i.Operand).ToArray();
     var dependencyDirs = originalOperands.OfType<FieldReference>().First(f => f.Name == "DependencyDirs");
-    var mods = originalOperands.OfType<FieldReference>().First(f => f.Name == "Mods");
     var removePatchReferences = originalOperands.OfType<FieldReference>().First(f => f.Name == "RemovePatchReferences");
     var origInitMMFlags = relinker.Methods.First(m => m.Name == "orig_InitMMFlags");
     var seedDependencyCache = relinker.Methods.First(m => m.Name == "SeedDependencyCache");
@@ -258,7 +292,6 @@ static void RewriteInitMMFlags(ModuleDefinition module) {
         m.Parameters[0].ParameterType.FullName == "System.String");
     var addMethods = originalOperands.OfType<MethodReference>().Where(m => m.Name == "Add").ToArray();
     var listStringAdd = addMethods.First(m => m.DeclaringType.FullName.Contains("System.String"));
-    var listModuleReferenceAdd = addMethods.First(m => m.DeclaringType.FullName.Contains("Mono.Cecil.ModuleReference"));
 
     var body = method.Body;
     body.Instructions.Clear();
@@ -274,7 +307,9 @@ static void RewriteInitMMFlags(ModuleDefinition module) {
     il.Append(il.Create(OpCodes.Ldfld, dependencyDirs));
     il.Append(il.Create(OpCodes.Ldstr, "/bin/"));
     il.Append(il.Create(OpCodes.Callvirt, listStringAdd));
-    AppendSeedModModule("/bin/Celeste.Wasm.mm.dll");
+    // InitMMFlags runs BEFORE modder.Read(), so modder.Module is null here.
+    // Only seed dependencies. Patcher.PatchCeleste independently applies the
+    // game patch assembly; adding it to every mod injects unrelated FMOD types.
     AppendSeedDependencyModule("/bin/mscorlib.dll");
     AppendSeedDependencyModule("/bin/netstandard.dll");
     AppendSeedDependencyModule("/bin/System.Private.CoreLib.dll");
@@ -284,22 +319,6 @@ static void RewriteInitMMFlags(ModuleDefinition module) {
     il.Append(il.Create(OpCodes.Ldc_I4_0));
     il.Append(il.Create(OpCodes.Stfld, removePatchReferences));
     il.Append(il.Create(OpCodes.Ret));
-
-    void AppendSeedModModule(string path) {
-        il.Append(il.Create(OpCodes.Ldstr, path));
-        il.Append(il.Create(OpCodes.Call, readModule));
-        il.Append(il.Create(OpCodes.Stloc_0));
-        il.Append(il.Create(OpCodes.Ldarg_0));
-        il.Append(il.Create(OpCodes.Ldfld, mods));
-        il.Append(il.Create(OpCodes.Ldloc_0));
-        il.Append(il.Create(OpCodes.Callvirt, listModuleReferenceAdd));
-        il.Append(il.Create(OpCodes.Ldarg_0));
-        il.Append(il.Create(OpCodes.Ldloc_0));
-        il.Append(il.Create(OpCodes.Call, seedDependencyCache));
-        il.Append(il.Create(OpCodes.Ldarg_0));
-        il.Append(il.Create(OpCodes.Ldloc_0));
-        il.Append(il.Create(OpCodes.Callvirt, mapDependencies));
-    }
 
     void AppendSeedDependencyModule(string path) {
         il.Append(il.Create(OpCodes.Ldstr, path));

@@ -315,22 +315,18 @@ public sealed class MobileTweaksModule : EverestModule
             {
                 continue;
             }
+
             string key =
                 GetButtonKey(button);
+
             // Move Everest's main-menu Mod Options button under normal
             // Options. Detect it by its public label key instead of referring
             // to Everest's internal MainMenuModOptionsButton class.
             if (string.Equals(
-                key,
-                "menu_modoptions",
-                StringComparison.OrdinalIgnoreCase))
-            {
-                button.RemoveSelf();
-                continue;
-            }
-            // The mobile shell intentionally replaces these vanilla bottom
-            // entries with its compact six-entry home screen.
-            if (string.Equals(
+                    key,
+                    "menu_modoptions",
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
                     key,
                     "menu_credits",
                     StringComparison.OrdinalIgnoreCase) ||
@@ -346,13 +342,17 @@ public sealed class MobileTweaksModule : EverestModule
                 button.RemoveSelf();
                 continue;
             }
-            // Keep the mobile home screen within the layout MouseUI targets.
-            // Unrelated mod entries remain available through Mod Options.
-            button.RemoveSelf();
+
+            // Preserve buttons we do not recognize. This makes the mobile
+            // menu robust to Everest / mod button implementation changes
+            // instead of silently deleting the rest of the UI.
+            Add(button);
         }
+
         bool changed =
             ordered.Count != buttons.Count ||
             !ordered.SequenceEqual(buttons);
+
         if (changed)
         {
             buttons.Clear();

@@ -32,46 +32,50 @@
                 } catch {
                 }
             };
-            const touch = { x: -1, y: -1, down: false, tapped: false, scroll: 0 };
-            const setTouch = (event) => {
-                const point = event.changedTouches?.[0] || event.touches?.[0] || event;
-                if (!point) return;
-                touch.x = point.clientX;
-                touch.y = point.clientY;
+            const touch = { x: -1, y: -1, down: false, tapped: false, scroll: 0, id: null, dragged: false, startX: 0, startY: 0 };
+            const gamePoint = event => {
+                const rect = document.querySelector('canvas')?.getBoundingClientRect();
+                if (!rect) return { x: -1, y: -1 };
+                const scale = Math.min(rect.width / 1920, rect.height / 1080);
+                return { x: (event.clientX - rect.left - (rect.width - 1920 * scale) / 2) / scale,
+                    y: (event.clientY - rect.top - (rect.height - 1080 * scale) / 2) / scale };
             };
-            addEventListener("pointermove", setTouch, { passive: true });
-            addEventListener("pointerdown", (event) => {
+            const isGameTouch = event => !event.target.closest?.('#celeste-touch-controls,dialog,input,button');
+            const setTouch = (event) => {
+                const point = gamePoint(event);
+                touch.x = point.x; touch.y = point.y;
+            };
+            addEventListener("pointermove", event => {
+                if (!isGameTouch(event)) return;
+                const previousY = touch.y;
                 setTouch(event);
-                touch.down = true;
+                if (touch.down && touch.id === event.pointerId) {
+                    if (Math.hypot(touch.x-touch.startX,touch.y-touch.startY)>16) touch.dragged=true;
+                    if (touch.dragged) touch.scroll += touch.y - previousY;
+                }
+            }, { passive: true });
+            addEventListener("pointerdown", (event) => {
+                if (!isGameTouch(event)) return;
+                setTouch(event);
+                touch.id=event.pointerId; touch.down=true; touch.dragged=false; touch.tapped=false;
+                touch.startX=touch.x; touch.startY=touch.y;
             }, { passive: true });
             addEventListener("pointerup", (event) => {
+                if(touch.id!==event.pointerId) return;
                 setTouch(event);
-                touch.down = false;
-                touch.tapped = true;
+                touch.down = false; touch.id=null;
+                touch.tapped = !touch.dragged;
             }, { passive: true });
             addEventListener("pointercancel", () => {
-                touch.down = false;
-            }, { passive: true });
-            addEventListener("touchmove", setTouch, { passive: true });
-            addEventListener("touchstart", (event) => {
-                setTouch(event);
-                touch.down = true;
-            }, { passive: true });
-            addEventListener("touchend", (event) => {
-                setTouch(event);
-                touch.down = false;
-                touch.tapped = true;
-            }, { passive: true });
-            addEventListener("touchcancel", () => {
-                touch.down = false;
+                touch.down = false; touch.id=null; touch.tapped=false;
             }, { passive: true });
             addEventListener("wheel", (event) => {
-                touch.scroll += event.deltaY;
+                if (isGameTouch(event)) touch.scroll -= event.deltaY;
             }, { passive: true });
             window.celesteAndroidHaptic = (strength, length) => syncBridge("haptic", { strength, length });
             window.celesteAndroidOpenUrl = (url) => syncBridge("openUrl", { url });
             window.celesteAndroidOpenModBrowser = () => {
-                showDialog(window.app?.modmenu || window.app?.fs);
+                window.celesteOpenModManager?.();
             };
             window.celesteAndroidOpenSaveData = () => {
                 if (window.app?.savesmenu) showDialog(window.app.savesmenu);
@@ -84,6 +88,13 @@
             window.celesteAndroidOpenLayoutEditor = () => window.dispatchEvent(new CustomEvent("celeste-open-layout-editor"));
             window.celesteAndroidSetOption = (key, value) => {
                 try { localStorage.setItem("celeste.option." + key, String(value)); } catch {}
+                window.dispatchEvent(new CustomEvent('celeste-option-changed', {detail:{key,value}}));
+            };
+            const controlOptions = new Map();
+            window.celesteQueueControlOption=(key,value)=>controlOptions.set(key,value);
+            window.celesteAndroidConsumeOptions=()=>{
+                const result=Array.from(controlOptions,([key,value])=>key+'='+value).join('|');
+                controlOptions.clear();return result;
             };
             window.celesteAndroidConsumeTouchTap = () => {
                 const tapped = touch.tapped;
@@ -235,10 +246,10 @@
             }
         };
         const setBootStatus = (text, error = false) => {
-            const status = document.getElementById("static-boot-status");
-            if (status) {
+            for (const status of document.querySelectorAll("#static-boot-status, #boot-status-label")) {
                 status.textContent = text;
-                status.classList.toggle("error", error);
+                status.classList.toggle("error", error === true);
+                status.style.color = error === true ? "#ff6b6b" : "";
             }
         };
         window.celesteSetBootStatus = setBootStatus;
@@ -345,7 +356,7 @@
         margin: 0; padding: 0; width: 100%; height: 100%;
         background-color: #000;
         overflow: hidden !important;
-        touch-action: none; user-select: none; -webkit-user-select: none;
+        touch-action: auto; user-select: none; -webkit-user-select: none;
         position: fixed; transform: translateZ(0);
         -webkit-tap-highlight-color: transparent;
     }
@@ -399,6 +410,7 @@
     }
     
     canvas {
+        touch-action: none;
         display: block; margin: 0 auto;
         width: 100% !important; height: 100% !important;
         object-fit: contain; z-index: 1;
@@ -425,6 +437,10 @@
     }
     body:not(.game-rendered) main:has(#boot-status-label) {
         z-index: 2147483647 !important;
+    }
+    body:has(#static-boot):not(.game-rendered) main:has(#boot-status-label) {
+        /* The static overlay owns startup text; avoid two labels overlapping. */
+        visibility: hidden !important;
     }
     body.playing canvas { position: fixed !important; top: 0; left: 0; right: 0; bottom: 0; width: 100vw !important; height: 100vh !important; z-index: 2147483646 !important; background: #000; opacity: 1 !important; visibility: visible !important; }
 </style>
@@ -501,5 +517,7 @@
     })();
 </script>
 
+    <script src="touch-controls.js"></script>
+    <script src="mod-manager.js"></script>
 </body>
 </html>

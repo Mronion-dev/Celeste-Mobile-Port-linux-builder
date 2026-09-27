@@ -18,6 +18,12 @@ public sealed class MobileBridgeSettings : EverestModuleSettings {
     private bool joystickMode = true;
     private bool joystickSnap8Way = true;
     private bool hapticFeedback = true;
+    private bool controlsAlwaysOn;
+
+    public bool ControlsAlwaysOn {
+        get => controlsAlwaysOn;
+        set { controlsAlwaysOn = value; MobileBridgeApi.SetOption("controls_always_on", value); }
+    }
 
     public bool TouchControls {
         get => touchControls;
@@ -74,6 +80,7 @@ public sealed class MobileBridgeModule : EverestModule {
     }
 
     public override void Load() {
+        On.Monocle.Engine.Update += OnEngineUpdate;
         On.Celeste.Input.Rumble += OnRumble;
         On.Celeste.Overworld.ReloadMenus += OnOverworldReloadMenus;
         Everest.Events.MainMenu.OnCreateButtons += OnCreateMainMenuButtons;
@@ -84,9 +91,52 @@ public sealed class MobileBridgeModule : EverestModule {
     }
 
     public override void Unload() {
+        On.Monocle.Engine.Update -= OnEngineUpdate;
         On.Celeste.Input.Rumble -= OnRumble;
         On.Celeste.Overworld.ReloadMenus -= OnOverworldReloadMenus;
         Everest.Events.MainMenu.OnCreateButtons -= OnCreateMainMenuButtons;
+    }
+
+    private bool? lastGameplay;
+    private bool? lastPauseOnly;
+    private bool crouchDashBound;
+    private int optionPoll;
+    private void OnEngineUpdate(On.Monocle.Engine.orig_Update orig, Engine engine, GameTime time) {
+        orig(engine, time);
+        if (!MobileBridgeApi.IsBrowser) return;
+        if (++optionPoll >= 15) {
+            optionPoll = 0;
+            string changes = MobileBridgeApi.ConsumeOptions();
+            foreach (string change in changes.Split('|')) {
+                string[] pair = change.Split('=');
+                if (pair.Length != 2 || !bool.TryParse(pair[1], out bool value)) continue;
+                switch (pair[0]) {
+                    case "touch_controls": Settings.TouchControls = value; break;
+                    case "controls_always_on": Settings.ControlsAlwaysOn = value; break;
+                    case "joystick_mode": Settings.JoystickMode = value; break;
+                    case "joystick_snap_8way": Settings.JoystickSnap8Way = value; break;
+                }
+            }
+            if (changes.Length > 0) SaveSettings();
+        }
+        if (!crouchDashBound && global::Celeste.Settings.Instance?.DemoDash != null) {
+            global::Celeste.Settings.Instance.DemoDash.Add(Microsoft.Xna.Framework.Input.Keys.V);
+            crouchDashBound = true;
+        }
+        bool postcard = Engine.Scene?.Entities.Any(entity => entity.Visible && entity is Postcard) == true;
+        bool interactiveTutorial = Engine.Scene?.Entities.OfType<BirdTutorialGui>().Any(gui => gui.Visible && gui.Open) == true;
+        bool pauseOnly = postcard || Engine.Scene is IntroVignette ||
+            (Engine.Scene is Level cinematic && cinematic.InCutscene && !interactiveTutorial && !cinematic.Paused);
+        if (lastPauseOnly != pauseOnly) {
+            lastPauseOnly = pauseOnly;
+            MobileBridgeApi.SetOption("pause_only", pauseOnly);
+        }
+        bool gameplay = !pauseOnly && Engine.Scene is Level level && !level.Paused &&
+            !level.Entities.OfType<TextMenu>().Any(menu => menu.Visible);
+        if (lastGameplay != gameplay) {
+            lastGameplay = gameplay;
+            MobileBridgeApi.SetGameplay(gameplay);
+        }
     }
 
     public override void CreateModMenuSection(
@@ -175,6 +225,10 @@ public sealed class MobileBridgeModule : EverestModule {
         menu.Add(
             new TextMenu.Header(
                 "MOBILE CONTROLS"));
+        menu.Add(new TextMenu.OnOff("SHOW CONTROLS", Settings.TouchControls)
+            .Change(value => Settings.TouchControls = value));
+        menu.Add(new TextMenu.OnOff("ON-SCREEN CONTROLS ALWAYS ON", Settings.ControlsAlwaysOn)
+            .Change(value => Settings.ControlsAlwaysOn = value));
 
         TextMenu.OnOff snap = new(
             "8-WAY SNAP",
@@ -279,6 +333,7 @@ public sealed class MobileBridgeModule : EverestModule {
         MobileBridgeApi.SetOption(
             "touch_controls",
             settings.TouchControls);
+        MobileBridgeApi.SetOption("controls_always_on", settings.ControlsAlwaysOn);
 
         MobileBridgeApi.SetOption(
             "joystick_mode",
@@ -526,6 +581,10 @@ public sealed class MobileBridgeModule : EverestModule {
 
 public static partial class MobileBridgeApi {
 #if BROWSER
+    [JSImport("celesteAndroidConsumeOptions", "android-port.js")]
+    private static partial string JsConsumeOptions();
+    [JSImport("celesteAndroidSetGameplay", "android-port.js")]
+    private static partial void JsSetGameplay(bool gameplay);
     [JSImport("celesteAndroidHaptic", "android-port.js")]
     private static partial void JsHaptic(
         string strength,
@@ -586,6 +645,8 @@ public static partial class MobileBridgeApi {
     [JSImport("celesteAndroidGetCelesteNetServers", "android-port.js")]
     private static partial string JsGetCelesteNetServers();
 #else
+    private static string JsConsumeOptions() => "";
+    private static void JsSetGameplay(bool gameplay) { }
     private static void JsHaptic(
         string strength,
         string length) {
@@ -649,21 +710,21 @@ public static partial class MobileBridgeApi {
 
     public static bool IsBrowser {
         get {
-            try {
-                return string.Equals(
-                        Environment.GetEnvironmentVariable("EVEREST_PATH"),
-                        "/libsdl",
-                        StringComparison.Ordinal) ||
-                    !string.IsNullOrEmpty(
-                        Environment.GetEnvironmentVariable("CEL_WASM_LOG_LEVEL"));
-            } catch {
-                return false;
-            }
+#if BROWSER
+            return true;
+#else
+            return false;
+#endif
         }
     }
 
     public static bool TouchAvailable =>
-        IsBrowser;
+        IsBrowser && !(MobileBridgeModule.Instance?._Settings is MobileBridgeSettings settings && settings.ControlsAlwaysOn);
+
+    public static void SetGameplay(bool gameplay) => Invoke(() => JsSetGameplay(gameplay));
+    public static string ConsumeOptions() {
+        try { return IsBrowser ? JsConsumeOptions() ?? "" : ""; } catch { return ""; }
+    }
 
     public static void Haptic(
         string strength,
@@ -879,7 +940,9 @@ public static partial class MobileBridgeApi {
 
         try {
             action();
-        } catch {
+        } catch (Exception error) {
+            if (!reportedBridgeError) { reportedBridgeError = true; Logger.Log("MobileBridge", "Browser bridge failed: " + error); }
         }
     }
+    private static bool reportedBridgeError;
 }

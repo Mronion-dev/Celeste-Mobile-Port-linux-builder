@@ -22,12 +22,14 @@ Developed by <a href="https://unlim8ted.com">Unlim8ted Studios</a>
 
 > [!NOTE]
 > **Project status: Active development.**
-> The threaded Celeste/Everest WebAssembly runtime, Android GeckoView host, touch-control system, save/mod persistence, and modular mobile integration are functional. Multiplayer hosting, the simplified in-game map editor, iOS support, and some modified-Everest compatibility work are still under active development.
+> Android startup has reached a visibly rendered Everest screen on the emulator. The latest physical-device texture-loading fix still needs on-device play testing. Feature checkboxes below describe implemented code, not a guarantee that every feature has passed Android end-to-end testing. Multiplayer hosting, map editing, iOS support, and modified-Everest compatibility remain under development.
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Features](#features)
+- [Completed Android startup work](#completed-android-startup-work)
+- [Ownership and releases](#ownership-and-releases)
   - [Touch Controls](#-touch-controls)
   - [Mobile Improvements](#-mobile-improvements)
   - [Haptics](#-haptics)
@@ -114,9 +116,84 @@ The goal is for Android and iOS to share the same Celeste/Everest runtime and mo
 
 ---
 
+## Completed Android startup work
+
+Latest package: **1.0.1-preview.5**, development-signed. Android mods and APK rebuilt;
+focused browser/assembly checks pass. Physical-device regression testing remains required.
+
+- [x] Atlas-only unlock picker; encrypted game parts and metadata bundled inside the APK.
+- [x] Gameplay controls: Grab, Dash, Jump and Crouch Dash, with Pause separate.
+- [x] Pause-only overlay during passive cutscenes, postcards and intro vignette; interactive tutorial prompts restore movement/action controls. Postcard taps reach the confirmation coroutine.
+- [x] Floating Controls shortcut hidden by default; layout editor available in Options.
+- [x] Show/always-on controls, reset layout, exclusive arrows/joystick and visible 8-way snapping.
+- [x] Nearby missed gameplay touches select the nearest control.
+- [x] Finger scrolling, Mod Manager dialog and native website opening (manager/link checked on emulator).
+- [x] Assist Mode arrows, enable/disable selection and chapter-unlock pointer handlers implemented.
+- [x] English autosave screen says phone; bundled mod labels use their proper text.
+- [x] Startup filesystem error fixed; browser bridge compiled with real WASM imports.
+- [x] iOS wrapper source and Mac build scripts created (see [iOS build instructions](IOSWrapper/README.md)).
+- [ ] iOS compilation, signed IPA export and device validation; no IPA built on Windows.
+
+- [x] Everest patching and initialization through `CelesteLoader.Init successful`.
+- [x] FMOD initialization using update-driven mixing, streaming and bank loading.
+- [x] Canonical `/libsdl/Content` path for language loading.
+- [x] Disable Everest parallel texture loading that can deadlock on higher-core-count phones.
+- [x] Loading overlay waits for non-black framebuffer samples instead of `GAME DISPLAYED`.
+- [x] Correct SRGB8 (`0x8C41`) empty render-target allocations to SRGB8_ALPHA8. `0x8C41` is not RGB16F.
+- [x] Skip the automatic Everest play/speedrun/create welcome questionnaire.
+- [x] Compatible-file import with SHA-256 verification and a public APK packaging mode.
+- [ ] Optional store-account verification service (Android entry requires a separately hosted service).
+- [x] Release preparation: notes, tag, attachments, SHA-256 sums and an explicit draft-release command.
+- [x] File-key decryption using the original `Content/Graphics/Atlases/Gameplay0.data` from an owned desktop install.
+- [x] One installable APK per GitHub Release, with encrypted game data inside it. Generated APKs stay out of Git; repository files must remain below 100 MB.
+- [x] Rebuilt MobileTweaks, MobileBridge and MouseUI included in the public APK.
+- [x] Android setup asks only for the owned Gameplay0.data atlas; on-device decryption and verified import.
+- [x] MobileTweaks English autosave notice says "Please do not turn off your phone while this icon is visible".
+- [x] Bundled mobile mods load from unpacked folders; emulator reaches the main menu with all three modules registered.
+- [x] Startup failures replace the loading status with the error instead of leaving "initializing" displayed.
+- [ ] Confirm the latest build through gameplay on a physical Android device.
+- [ ] Live Steam sign-in validation with a configured service and account.
+- [ ] Convert ordinary desktop store installations into compatible WASM game files automatically.
+
+The public APK bundles MobileTweaks, MobileBridge and MouseUI. The mod build also
+rebuilds BetterMapEditor and MobileMultiplayer, which remain optional. The feature
+lists describe source implementations; device validation must be checked for each release.
+
+## Ownership and releases
+
+The file-key route checks possession of a compatible original atlas, rather than
+proving a store purchase. Store-account verification is not configured in this
+build. itch.io and Epic login are not implemented.
+
+The encrypted release is unlocked using `Gameplay0.data` from the user's desktop
+install. Choose **Unlock with my game file** on Android and select that atlas.
+No other files or folders need to be imported. The advanced
+`game_pack.py` tool still requires an already prepared private `CelesteRuntime`.
+Public APKs contain encrypted game assets, with no plaintext commercial game assemblies or Content archive.
+Do not upload the normal bundled development APK or a private import ZIP.
+
+```powershell
+python scripts/prepare-release.py --manifest-only
+python scripts/prepare-encrypted-assets.py --private-pack path/to/private-import.zip --key-file path/to/Content/Graphics/Atlases/Gameplay0.data
+# Build Android with -PpublicPackage=true. Retain your signing key for updates.
+python scripts/prepare-release.py --version 1.0.1-preview.4 --apk path/to/public-signed.apk
+```
+
+This creates a review folder under `release/`; it does not publish or create tags.
+
 ## Features
 
+Checked items mean implemented in source. Physical-device validation is tracked
+separately above; unchecked items are planned or incomplete.
+
 ### 🎮 Touch Controls
+
+Open **Options > Mobile Controls > Resize / Move Controls** to edit the touchscreen layout. The floating Controls shortcut is hidden by default. Drag buttons, change
+their size, switch between joystick and arrows, or reset the layout. Changes are
+saved on the device. Full controls appear during active gameplay and hide in menus by default. Passive cutscenes, postcards and the intro vignette show only Pause. Open tutorial prompts restore movement and action controls, including up-right + Dash in the prologue. Postcards accept direct taps through their confirmation coroutine.
+Options > Mobile Controls includes **On-screen controls always on** for mod UIs
+that need keyboard-style navigation. Jump confirms and Dash cancels in that mode.
+Gameplay actions are Grab, Dash, Jump and Crouch Dash, with a separate Pause button.
 
 - [x] Fully customizable touchscreen controls
 - [x] Drag, resize, and reposition gameplay controls
@@ -126,6 +203,10 @@ The goal is for Android and iOS to share the same Celeste/Everest runtime and mo
 - [x] Arrow-button movement mode
 - [x] Optional 8-way joystick snapping
 - [x] Matching joystick snapping behavior
+- [x] Visible joystick knob follows the snapped direction
+- [x] Nearby missed touches select the nearest gameplay button within a small margin
+- [x] Finger scrolling in MouseUI menus
+- [x] MouseUI assist confirmation and assist-unlockable chapter input
 - [x] In-game control layout editor
 - [x] Touch interaction with Celeste menus through `MouseUI`
 - [x] Mouse support independent of the mobile platform
@@ -473,7 +554,7 @@ The Android wrapper is responsible for services such as:
 
 ### iOS Wrapper
 
-`IOSWrapper/` provides the corresponding platform layer for iOS.
+`IOSWrapper/` contains an **experimental, uncompiled** WKWebView wrapper, CryptoKit atlas unlock, loopback asset server, XcodeGen project specification and Mac build/export script. See [IOSWrapper/README.md](IOSWrapper/README.md). This Windows workspace has no Xcode or Apple signing setup, so there is **no built IPA**.
 
 The goal is not to maintain a separate iOS Celeste implementation.
 
