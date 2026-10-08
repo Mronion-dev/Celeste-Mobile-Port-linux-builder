@@ -168,16 +168,6 @@ build. itch.io and Epic login are not implemented.
 The encrypted release is unlocked using `Gameplay0.data` from the user's desktop
 install. Choose **Unlock with my game file** on Android and select that atlas.
 No other files or folders need to be imported. The advanced
-`game_pack.py` tool still requires an already prepared private `CelesteRuntime`.
-Public APKs contain encrypted game assets, with no plaintext commercial game assemblies or Content archive.
-Do not upload the normal bundled development APK or a private import ZIP.
-
-```powershell
-python scripts/prepare-release.py --manifest-only
-python scripts/prepare-encrypted-assets.py --private-pack path/to/private-import.zip --key-file path/to/Content/Graphics/Atlases/Gameplay0.data
-# Build Android with -PpublicPackage=true. Retain your signing key for updates.
-python scripts/prepare-release.py --version 1.0.1-preview.4 --apk path/to/public-signed.apk
-```
 
 This creates a review folder under `release/`; it does not publish or create tags.
 
@@ -1374,7 +1364,7 @@ Third-party components remain subject to their respective licenses and copyright
 
 Celeste and its associated names, characters, artwork, audio, game code, commercial assets, and other intellectual property belong to their respective rights holders.
 
-Commercial Celeste game data, including `data.data`, is not included in this repository and must be supplied from a legally obtained copy of Celeste.
+Commercial Celeste game data, including `Gameplay0.data`, is not included in this repository and must be supplied from a legally obtained copy of Celeste.
 
 This project is not affiliated with, sponsored by, or endorsed by Extremely OK Games.
 
