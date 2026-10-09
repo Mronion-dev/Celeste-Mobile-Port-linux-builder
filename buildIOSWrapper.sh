@@ -3,4 +3,4 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
-exec "$SCRIPT_DIR/build.sh" --target IOS "$@"
+exec "$SCRIPT_DIR/buildWrappers.sh" --target IOS "$@"
