@@ -9,8 +9,6 @@ import android.view.Window;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import org.json.JSONObject;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -31,6 +29,7 @@ public final class MainActivity extends Activity {
     private FrameLayout root;
     private GameFiles gameFiles;
     private TextView setupStatus;
+    private SetupScreen setupScreen;
     private boolean importing;
 
     @Override // android.app.Activity
@@ -77,33 +76,18 @@ public final class MainActivity extends Activity {
     }
 
     private void showSetup() {
-        LinearLayout setup = new LinearLayout(this);
-        setup.setOrientation(LinearLayout.VERTICAL); setup.setPadding(32, 24, 32, 24);
-        setupStatus = new TextView(this); setupStatus.setTextColor(-1); setupStatus.setTextSize(18);
-        setupStatus.setText("Unlock Celeste on your phone\n\nSelect Gameplay0.data from Content/Graphics/Atlases in your own Celeste installation. " +
-            "The encrypted game data is included in this app. You only need to copy your atlas file to your phone.\n\nBuild " + BuildConfig.VERSION_NAME);
-        setup.addView(setupStatus);
-        Button decrypt = new Button(this); decrypt.setText("Unlock with my game file");
-        decrypt.setOnClickListener(v -> {
-            if (!importing) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE), 43);
-        }); setup.addView(decrypt);
-        Button importButton = new Button(this); importButton.setText("Import my game files");
-        importButton.setOnClickListener(v -> {
-            if (importing) return;
-            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/zip").addCategory(Intent.CATEGORY_OPENABLE);
-            startActivityForResult(intent, 41);
-        }); setup.addView(importButton);
-        if (!BuildConfig.OWNERSHIP_SERVICE.isEmpty()) {
-            Button steam = new Button(this); steam.setText("Verify with Steam (optional)");
-            steam.setOnClickListener(v -> { steam.setEnabled(false); verifySteam(steam); }); setup.addView(steam);
-        }
-        ScrollView scroll = new ScrollView(this); scroll.addView(setup); root.addView(scroll);
+        setupScreen = new SetupScreen(this,
+            () -> { if (!importing) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE), 43); },
+            () -> { if (!importing) startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/zip").addCategory(Intent.CATEGORY_OPENABLE), 41); },
+            BuildConfig.OWNERSHIP_SERVICE.isEmpty() ? null : button -> { button.setEnabled(false); verifySteam(button); });
+        setupStatus = setupScreen.status;
+        root.addView(setupScreen, new FrameLayout.LayoutParams(-1,-1));
     }
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == 43 && result == RESULT_OK && data != null && data.getData() != null && !importing) {
-            importing = true;
+            importing = true; setupScreen.busy(true);
             setupStatus.setText("Opening encrypted game files...");
             Uri keyFile = data.getData();
             new Thread(() -> {
@@ -112,19 +96,19 @@ public final class MainActivity extends Activity {
                         message -> runOnUiThread(() -> setupStatus.setText(message)));
                     runOnUiThread(() -> { importing = false; if (!isDestroyed()) startGame(); });
                 } catch (Exception ex) {
-                    runOnUiThread(() -> { importing = false; setupStatus.setText("Unlock failed: " + ex.getMessage() + "\nSelect your original Gameplay0.data to try again."); });
+                    runOnUiThread(() -> { importing = false; setupScreen.error("Unlock failed: " + ex.getMessage() + "\nSelect your original Gameplay0.data to try again."); });
                 }
             }, "celeste-game-decrypt").start();
             return;
         }
         if (request != 41 || result != RESULT_OK || data == null || data.getData() == null || importing) return;
-        importing = true; setupStatus.setText("Checking and importing game files… Keep this app open.");
+        importing = true; setupScreen.busy(true); setupStatus.setText("Checking and importing game files… Keep this app open.");
         new Thread(() -> {
             try {
-                gameFiles.install(getContentResolver().openInputStream(data.getData()));
+                DesktopImport.install(this, data.getData(), gameFiles, message -> runOnUiThread(() -> setupStatus.setText(message)));
                 runOnUiThread(() -> { importing = false; if (!isDestroyed()) startGame(); });
             } catch (Exception ex) {
-                runOnUiThread(() -> { importing = false; setupStatus.setText("Import failed: " + ex.getMessage() + "\nYour previous files were kept. Choose a compatible ZIP and try again."); });
+                runOnUiThread(() -> { importing = false; setupScreen.error("Import failed: " + ex.getMessage() + "\nYour previous files were kept. Choose your desktop Celeste ZIP or select Gameplay0.data directly."); });
             }
         }, "celeste-game-import").start();
     }
