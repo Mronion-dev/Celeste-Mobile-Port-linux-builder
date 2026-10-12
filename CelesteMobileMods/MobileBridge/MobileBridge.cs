@@ -85,6 +85,7 @@ public sealed class MobileBridgeModule : EverestModule {
         On.Celeste.Input.Rumble += OnRumble;
         On.Celeste.Overworld.ReloadMenus += OnOverworldReloadMenus;
         On.Celeste.OuiFileNaming.Update += OnFileNamingUpdate;
+        On.Celeste.OuiFileNaming.Render += OnFileNamingRender;
         Everest.Events.MainMenu.OnCreateButtons += OnCreateMainMenuButtons;
     }
 
@@ -97,6 +98,7 @@ public sealed class MobileBridgeModule : EverestModule {
         On.Celeste.Input.Rumble -= OnRumble;
         On.Celeste.Overworld.ReloadMenus -= OnOverworldReloadMenus;
         On.Celeste.OuiFileNaming.Update -= OnFileNamingUpdate;
+        On.Celeste.OuiFileNaming.Render -= OnFileNamingRender;
         Everest.Events.MainMenu.OnCreateButtons -= OnCreateMainMenuButtons;
     }
 
@@ -105,18 +107,44 @@ public sealed class MobileBridgeModule : EverestModule {
     private bool crouchDashBound;
     private int optionPoll;
     private OuiFileNaming activeNaming;
+    private string promptName;
     private static readonly MethodInfo FinishNaming = typeof(OuiFileNaming).GetMethod("Finish", BindingFlags.Instance | BindingFlags.NonPublic);
     private static readonly MethodInfo CancelNaming = typeof(OuiFileNaming).GetMethod("Cancel", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly FieldInfo NamingEase = typeof(OuiFileNaming).GetField("ease", BindingFlags.Instance | BindingFlags.NonPublic);
+    private void OnFileNamingRender(On.Celeste.OuiFileNaming.orig_Render orig, OuiFileNaming naming) {
+        if (!MobileBridgeApi.IsBrowser || activeNaming != naming || NamingEase == null) {
+            orig(naming);
+            return;
+        }
+
+        // The browser dialog replaces the game's picker; only its dimmed
+        // background is needed. The save card is rendered separately.
+        float ease = (float)NamingEase.GetValue(naming);
+        Draw.Rect(-10f, -10f, 1940f, 1100f, Color.Black * (0.8f * ease));
+    }
     private void OnFileNamingUpdate(On.Celeste.OuiFileNaming.orig_Update orig, OuiFileNaming naming) {
-        orig(naming);
+        bool browserPromptOpen = MobileBridgeApi.IsBrowser && activeNaming == naming;
+        bool inputDisabled = MInput.Disabled;
+        if (browserPromptOpen) MInput.Disabled = true;
+        try { orig(naming); }
+        finally { MInput.Disabled = inputDisabled; }
+        if (browserPromptOpen && promptName != null) naming.Name = promptName;
         if (!MobileBridgeApi.IsBrowser || !naming.Selected || !naming.Focused) return;
         if (activeNaming != naming) {
             activeNaming = naming;
-            MobileBridgeApi.OpenNamePrompt(naming.Name ?? "");
+            promptName = naming.Name ?? "";
+            MobileBridgeApi.OpenNamePrompt(promptName);
         }
         string response = MobileBridgeApi.ConsumeNamePrompt();
         if (response.Length == 0) return;
+        if (response[0] == '2') {
+            string preview = response.Substring(1);
+            promptName = preview.Length <= 12 ? preview : preview.Substring(0, 12);
+            naming.Name = promptName;
+            return;
+        }
         activeNaming = null;
+        promptName = null;
         if (response[0] == '0') {
             CancelNaming?.Invoke(naming, null);
         } else if (response[0] == '1') {
