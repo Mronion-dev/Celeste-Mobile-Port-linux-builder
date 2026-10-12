@@ -3,7 +3,10 @@ package com.unlim8ted.celeste;
 import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
+import android.provider.OpenableColumns;
+import android.database.Cursor;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.view.Window;
 import android.widget.FrameLayout;
@@ -16,10 +19,14 @@ import java.nio.charset.StandardCharsets;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.FileOutputStream;
 import org.mozilla.geckoview.GeckoRuntime;
 import org.mozilla.geckoview.GeckoRuntimeSettings;
 import org.mozilla.geckoview.GeckoSession;
 import org.mozilla.geckoview.GeckoView;
+import org.mozilla.geckoview.GeckoResult;
 
 public final class MainActivity extends Activity {
     private LocalAssetServer assetServer;
@@ -31,6 +38,8 @@ public final class MainActivity extends Activity {
     private TextView setupStatus;
     private SetupScreen setupScreen;
     private boolean importing;
+    private GeckoResult<GeckoSession.PromptDelegate.PromptResponse> pendingFileResult;
+    private GeckoSession.PromptDelegate.FilePrompt pendingFilePrompt;
 
     @Override // android.app.Activity
     protected void onCreate(Bundle savedInstanceState) {
@@ -58,6 +67,21 @@ public final class MainActivity extends Activity {
             GeckoRuntimeSettings settings = new GeckoRuntimeSettings.Builder().aboutConfigEnabled(true).consoleOutput(false).debugLogging(false).configFilePath(geckoConfig.getAbsolutePath()).build();
             this.runtime = GeckoRuntime.create(this, settings);
             this.session = new GeckoSession();
+            this.session.setPromptDelegate(new GeckoSession.PromptDelegate() {
+                @Override public GeckoResult<PromptResponse> onFilePrompt(GeckoSession session, FilePrompt prompt) {
+                    Log.i("CelesteFilePicker", "Web file prompt received");
+                    if (pendingFileResult != null) return GeckoResult.fromValue(prompt.dismiss());
+                    pendingFilePrompt = prompt;
+                    pendingFileResult = new GeckoResult<>();
+                    GeckoResult<PromptResponse> response = pendingFileResult;
+                    Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                        .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+                    picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, prompt.type == FilePrompt.Type.MULTIPLE);
+                    try { startActivityForResult(picker, 44); }
+                    catch (Exception error) { finishFilePrompt(null); }
+                    return response;
+                }
+            });
             this.session.open(this.runtime);
             GeckoView view = new GeckoView(this);
             view.setBackgroundColor(-16777216);
@@ -86,6 +110,21 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == 44) {
+            Uri selected = result == RESULT_OK && data != null ? data.getData() : null;
+            Log.i("CelesteFilePicker", "Document picker returned result=" + result + " selected=" + (selected != null));
+            if (selected == null) finishFilePrompt(null);
+            else new Thread(() -> {
+                try {
+                    Uri local = copyWebSelection(selected);
+                    runOnUiThread(() -> finishFilePrompt(local));
+                } catch (Exception error) {
+                    Log.e("CelesteFilePicker", "Could not copy selected file", error);
+                    runOnUiThread(() -> finishFilePrompt(null));
+                }
+            }, "celeste-web-file-picker").start();
+            return;
+        }
         if (request == 43 && result == RESULT_OK && data != null && data.getData() != null && !importing) {
             importing = true; setupScreen.busy(true);
             setupStatus.setText("Opening encrypted game files...");
@@ -111,6 +150,50 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> { importing = false; setupScreen.error("Import failed: " + ex.getMessage() + "\nYour previous files were kept. Choose your desktop Celeste ZIP or select Gameplay0.data directly."); });
             }
         }, "celeste-game-import").start();
+    }
+
+    private void finishFilePrompt(Uri selected) {
+        GeckoResult<GeckoSession.PromptDelegate.PromptResponse> result = pendingFileResult;
+        GeckoSession.PromptDelegate.FilePrompt prompt = pendingFilePrompt;
+        pendingFileResult = null;
+        pendingFilePrompt = null;
+        if (result != null && prompt != null) {
+            try { result.complete(selected == null ? prompt.dismiss() : prompt.confirm(this, selected)); }
+            catch (Exception error) {
+                Log.e("CelesteFilePicker", "Could not pass selected file to GeckoView", error);
+                result.complete(prompt.dismiss());
+            }
+        }
+    }
+
+    private Uri copyWebSelection(Uri source) throws IOException {
+        String name = "selected-file.zip";
+        try (Cursor cursor = getContentResolver().query(source, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) name = cursor.getString(0);
+        }
+        name = name == null ? "selected-file.zip" : name.replaceAll("[^A-Za-z0-9._ -]", "_");
+        if (name.isEmpty() || name.equals(".") || name.equals("..")) name = "selected-file.zip";
+        File directory = new File(getCacheDir(), "web-picked-files");
+        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("Cannot create file picker cache");
+        File target = new File(directory, name);
+        try {
+            try (InputStream in = getContentResolver().openInputStream(source);
+                 OutputStream out = new FileOutputStream(target)) {
+                if (in == null) throw new IOException("Cannot read selected file");
+                byte[] buffer = new byte[131072];
+                long size = 0; int count;
+                while ((count = in.read(buffer)) != -1) {
+                    size += count;
+                    if (size > 1_000_000_000L) throw new IOException("Selected file exceeds 1 GB");
+                    out.write(buffer, 0, count);
+                }
+            }
+        } catch (IOException error) {
+            if (target.exists()) target.delete();
+            throw error;
+        }
+        Log.i("CelesteFilePicker", "Copied web selection: " + target.length() + " bytes");
+        return Uri.fromFile(target);
     }
 
     private JSONObject service(String path, boolean post) throws Exception {
@@ -155,6 +238,7 @@ public final class MainActivity extends Activity {
 
     @Override // android.app.Activity
     protected void onDestroy() {
+        finishFilePrompt(null);
         if (this.session != null) {
             this.session.close();
             this.session = null;

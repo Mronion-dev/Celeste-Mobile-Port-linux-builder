@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 #if BROWSER
 using System.Runtime.InteropServices.JavaScript;
@@ -83,6 +84,7 @@ public sealed class MobileBridgeModule : EverestModule {
         On.Monocle.Engine.Update += OnEngineUpdate;
         On.Celeste.Input.Rumble += OnRumble;
         On.Celeste.Overworld.ReloadMenus += OnOverworldReloadMenus;
+        On.Celeste.OuiFileNaming.Update += OnFileNamingUpdate;
         Everest.Events.MainMenu.OnCreateButtons += OnCreateMainMenuButtons;
     }
 
@@ -94,6 +96,7 @@ public sealed class MobileBridgeModule : EverestModule {
         On.Monocle.Engine.Update -= OnEngineUpdate;
         On.Celeste.Input.Rumble -= OnRumble;
         On.Celeste.Overworld.ReloadMenus -= OnOverworldReloadMenus;
+        On.Celeste.OuiFileNaming.Update -= OnFileNamingUpdate;
         Everest.Events.MainMenu.OnCreateButtons -= OnCreateMainMenuButtons;
     }
 
@@ -101,6 +104,28 @@ public sealed class MobileBridgeModule : EverestModule {
     private bool? lastPauseOnly;
     private bool crouchDashBound;
     private int optionPoll;
+    private OuiFileNaming activeNaming;
+    private static readonly MethodInfo FinishNaming = typeof(OuiFileNaming).GetMethod("Finish", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly MethodInfo CancelNaming = typeof(OuiFileNaming).GetMethod("Cancel", BindingFlags.Instance | BindingFlags.NonPublic);
+    private void OnFileNamingUpdate(On.Celeste.OuiFileNaming.orig_Update orig, OuiFileNaming naming) {
+        orig(naming);
+        if (!MobileBridgeApi.IsBrowser || !naming.Selected || !naming.Focused) return;
+        if (activeNaming != naming) {
+            activeNaming = naming;
+            MobileBridgeApi.OpenNamePrompt(naming.Name ?? "");
+        }
+        string response = MobileBridgeApi.ConsumeNamePrompt();
+        if (response.Length == 0) return;
+        activeNaming = null;
+        if (response[0] == '0') {
+            CancelNaming?.Invoke(naming, null);
+        } else if (response[0] == '1') {
+            string name = response.Substring(1).Trim();
+            if (name.Length == 0) return;
+            naming.Name = name.Length <= 12 ? name : name.Substring(0, 12);
+            FinishNaming?.Invoke(naming, null);
+        }
+    }
     private void OnEngineUpdate(On.Monocle.Engine.orig_Update orig, Engine engine, GameTime time) {
         orig(engine, time);
         if (!MobileBridgeApi.IsBrowser) return;
@@ -644,6 +669,10 @@ public static partial class MobileBridgeApi {
 
     [JSImport("celesteAndroidGetCelesteNetServers", "android-port.js")]
     private static partial string JsGetCelesteNetServers();
+    [JSImport("celesteAndroidOpenNamePrompt", "android-port.js")]
+    private static partial void JsOpenNamePrompt(string currentName);
+    [JSImport("celesteAndroidConsumeNamePrompt", "android-port.js")]
+    private static partial string JsConsumeNamePrompt();
 #else
     private static string JsConsumeOptions() => "";
     private static void JsSetGameplay(bool gameplay) { }
@@ -706,6 +735,8 @@ public static partial class MobileBridgeApi {
 
     private static string JsGetCelesteNetServers() =>
         "";
+    private static void JsOpenNamePrompt(string currentName) { }
+    private static string JsConsumeNamePrompt() => "";
 #endif
 
     public static bool IsBrowser {
@@ -722,6 +753,10 @@ public static partial class MobileBridgeApi {
         IsBrowser && !(MobileBridgeModule.Instance?._Settings is MobileBridgeSettings settings && settings.ControlsAlwaysOn);
 
     public static void SetGameplay(bool gameplay) => Invoke(() => JsSetGameplay(gameplay));
+    public static void OpenNamePrompt(string currentName) => Invoke(() => JsOpenNamePrompt(currentName));
+    public static string ConsumeNamePrompt() {
+        try { return IsBrowser ? JsConsumeNamePrompt() ?? "" : ""; } catch { return ""; }
+    }
     public static string ConsumeOptions() {
         try { return IsBrowser ? JsConsumeOptions() ?? "" : ""; } catch { return ""; }
     }

@@ -4812,7 +4812,9 @@ async function initOnce() {
     celesteAndroidStartCelesteNetHost: (port) => !!globalThis.celesteAndroidStartCelesteNetHost?.(port),
     celesteAndroidStopCelesteNetHost: () => globalThis.celesteAndroidStopCelesteNetHost?.(),
     celesteAndroidIsCelesteNetHostRunning: () => !!globalThis.celesteAndroidIsCelesteNetHostRunning?.(),
-    celesteAndroidGetCelesteNetServers: () => String(globalThis.celesteAndroidGetCelesteNetServers?.() ?? "")
+    celesteAndroidGetCelesteNetServers: () => String(globalThis.celesteAndroidGetCelesteNetServers?.() ?? ""),
+    celesteAndroidOpenNamePrompt: (currentName) => globalThis.celesteAndroidOpenNamePrompt?.(currentName),
+    celesteAndroidConsumeNamePrompt: () => String(globalThis.celesteAndroidConsumeNamePrompt?.() ?? "")
   });
   const config = runtime.getConfig();
   const dlls = [
