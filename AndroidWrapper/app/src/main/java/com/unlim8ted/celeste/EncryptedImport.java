@@ -1,9 +1,7 @@
 package com.unlim8ted.celeste;
 
 import android.content.Context;
-import android.database.Cursor;
 import android.net.Uri;
-import android.provider.DocumentsContract;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 #if BROWSER
 using System.Runtime.InteropServices.JavaScript;
@@ -83,6 +84,8 @@ public sealed class MobileBridgeModule : EverestModule {
         On.Monocle.Engine.Update += OnEngineUpdate;
         On.Celeste.Input.Rumble += OnRumble;
         On.Celeste.Overworld.ReloadMenus += OnOverworldReloadMenus;
+        On.Celeste.OuiFileNaming.Update += OnFileNamingUpdate;
+        On.Celeste.OuiFileNaming.Render += OnFileNamingRender;
         Everest.Events.MainMenu.OnCreateButtons += OnCreateMainMenuButtons;
     }
 
@@ -94,6 +97,8 @@ public sealed class MobileBridgeModule : EverestModule {
         On.Monocle.Engine.Update -= OnEngineUpdate;
         On.Celeste.Input.Rumble -= OnRumble;
         On.Celeste.Overworld.ReloadMenus -= OnOverworldReloadMenus;
+        On.Celeste.OuiFileNaming.Update -= OnFileNamingUpdate;
+        On.Celeste.OuiFileNaming.Render -= OnFileNamingRender;
         Everest.Events.MainMenu.OnCreateButtons -= OnCreateMainMenuButtons;
     }
 
@@ -101,6 +106,54 @@ public sealed class MobileBridgeModule : EverestModule {
     private bool? lastPauseOnly;
     private bool crouchDashBound;
     private int optionPoll;
+    private OuiFileNaming activeNaming;
+    private string promptName;
+    private static readonly MethodInfo FinishNaming = typeof(OuiFileNaming).GetMethod("Finish", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly MethodInfo CancelNaming = typeof(OuiFileNaming).GetMethod("Cancel", BindingFlags.Instance | BindingFlags.NonPublic);
+    private static readonly FieldInfo NamingEase = typeof(OuiFileNaming).GetField("ease", BindingFlags.Instance | BindingFlags.NonPublic);
+    private void OnFileNamingRender(On.Celeste.OuiFileNaming.orig_Render orig, OuiFileNaming naming) {
+        if (!MobileBridgeApi.IsBrowser || activeNaming != naming || NamingEase == null) {
+            orig(naming);
+            return;
+        }
+
+        // The browser dialog replaces the game's picker; only its dimmed
+        // background is needed. The save card is rendered separately.
+        float ease = (float)NamingEase.GetValue(naming);
+        Draw.Rect(-10f, -10f, 1940f, 1100f, Color.Black * (0.8f * ease));
+    }
+    private void OnFileNamingUpdate(On.Celeste.OuiFileNaming.orig_Update orig, OuiFileNaming naming) {
+        bool browserPromptOpen = MobileBridgeApi.IsBrowser && activeNaming == naming;
+        bool inputDisabled = MInput.Disabled;
+        if (browserPromptOpen) MInput.Disabled = true;
+        try { orig(naming); }
+        finally { MInput.Disabled = inputDisabled; }
+        if (browserPromptOpen && promptName != null) naming.Name = promptName;
+        if (!MobileBridgeApi.IsBrowser || !naming.Selected || !naming.Focused) return;
+        if (activeNaming != naming) {
+            activeNaming = naming;
+            promptName = naming.Name ?? "";
+            MobileBridgeApi.OpenNamePrompt(promptName);
+        }
+        string response = MobileBridgeApi.ConsumeNamePrompt();
+        if (response.Length == 0) return;
+        if (response[0] == '2') {
+            string preview = response.Substring(1);
+            promptName = preview.Length <= 12 ? preview : preview.Substring(0, 12);
+            naming.Name = promptName;
+            return;
+        }
+        activeNaming = null;
+        promptName = null;
+        if (response[0] == '0') {
+            CancelNaming?.Invoke(naming, null);
+        } else if (response[0] == '1') {
+            string name = response.Substring(1).Trim();
+            if (name.Length == 0) return;
+            naming.Name = name.Length <= 12 ? name : name.Substring(0, 12);
+            FinishNaming?.Invoke(naming, null);
+        }
+    }
     private void OnEngineUpdate(On.Monocle.Engine.orig_Update orig, Engine engine, GameTime time) {
         orig(engine, time);
         if (!MobileBridgeApi.IsBrowser) return;
@@ -644,6 +697,10 @@ public static partial class MobileBridgeApi {
 
     [JSImport("celesteAndroidGetCelesteNetServers", "android-port.js")]
     private static partial string JsGetCelesteNetServers();
+    [JSImport("celesteAndroidOpenNamePrompt", "android-port.js")]
+    private static partial void JsOpenNamePrompt(string currentName);
+    [JSImport("celesteAndroidConsumeNamePrompt", "android-port.js")]
+    private static partial string JsConsumeNamePrompt();
 #else
     private static string JsConsumeOptions() => "";
     private static void JsSetGameplay(bool gameplay) { }
@@ -706,6 +763,8 @@ public static partial class MobileBridgeApi {
 
     private static string JsGetCelesteNetServers() =>
         "";
+    private static void JsOpenNamePrompt(string currentName) { }
+    private static string JsConsumeNamePrompt() => "";
 #endif
 
     public static bool IsBrowser {
@@ -722,6 +781,10 @@ public static partial class MobileBridgeApi {
         IsBrowser && !(MobileBridgeModule.Instance?._Settings is MobileBridgeSettings settings && settings.ControlsAlwaysOn);
 
     public static void SetGameplay(bool gameplay) => Invoke(() => JsSetGameplay(gameplay));
+    public static void OpenNamePrompt(string currentName) => Invoke(() => JsOpenNamePrompt(currentName));
+    public static string ConsumeNamePrompt() {
+        try { return IsBrowser ? JsConsumeNamePrompt() ?? "" : ""; } catch { return ""; }
+    }
     public static string ConsumeOptions() {
         try { return IsBrowser ? JsConsumeOptions() ?? "" : ""; } catch { return ""; }
     }

@@ -4656,11 +4656,11 @@ function xxh64File(path) {
   const data = runtime.Module.FS.readFile(path);
   return xxh64ToBytes(xxh64(data));
 }
-function bootStatus(message) {
+function bootStatus(message, progressOverride) {
   const text = "Initializing: " + message;
   console.warn("[android-port] " + message);
   if (typeof window.celesteSetBootStatus === "function") {
-    window.celesteSetBootStatus(text);
+    window.celesteSetBootStatus(text, message, progressOverride);
   }
   const progressSteps = {
     "creating dotnet runtime": 8,
@@ -4679,8 +4679,8 @@ function bootStatus(message) {
     "complete": 100
   };
   const progress = document.getElementById("progress");
-  if (progress && progressSteps[message] !== void 0) {
-    progress.style.width = progressSteps[message] + "%";
+  if (progress && (progressOverride !== void 0 || progressSteps[message] !== void 0)) {
+    progress.style.width = (progressOverride ?? progressSteps[message]) + "%";
   }
   const bootLabel = document.getElementById("boot-status-label") || document.getElementById("static-boot-status");
   if (bootLabel) {
@@ -4812,7 +4812,9 @@ async function initOnce() {
     celesteAndroidStartCelesteNetHost: (port) => !!globalThis.celesteAndroidStartCelesteNetHost?.(port),
     celesteAndroidStopCelesteNetHost: () => globalThis.celesteAndroidStopCelesteNetHost?.(),
     celesteAndroidIsCelesteNetHostRunning: () => !!globalThis.celesteAndroidIsCelesteNetHostRunning?.(),
-    celesteAndroidGetCelesteNetServers: () => String(globalThis.celesteAndroidGetCelesteNetServers?.() ?? "")
+    celesteAndroidGetCelesteNetServers: () => String(globalThis.celesteAndroidGetCelesteNetServers?.() ?? ""),
+    celesteAndroidOpenNamePrompt: (currentName) => globalThis.celesteAndroidOpenNamePrompt?.(currentName),
+    celesteAndroidConsumeNamePrompt: () => String(globalThis.celesteAndroidConsumeNamePrompt?.() ?? "")
   });
   const config = runtime.getConfig();
   const dlls = [
@@ -4842,7 +4844,11 @@ async function initOnce() {
   ensurePackagedContentRoot();
   if (!FS.analyzePath("/libsdl/Content/Graphics").exists && !FS.analyzePath("/libsdl/Content/Dialog").exists) {
     bootStatus("installing game data");
-    await new Promise((r) => loadData(runtime.Module, r));
+    await loadData(runtime.Module, null, {
+      onProgress: (loaded, total) => bootStatus(
+        "installing game data: " + Math.floor(loaded / 1048576) + " / " + Math.ceil(total / 1048576) + " MiB",
+        55 + 12 * loaded / total)
+    });
     console.info("Loaded packaged Celeste assets into runtime VFS");
   }
   bootStatus("seeding runtime");
@@ -5498,38 +5504,23 @@ async function installBundledMods() {
 }
 window.celesteInstallBundledMods = installBundledMods;
 async function unzipsave(file) {
-  let data = await file.arrayBuffer();
-  let unzipped = await new Promise((r, j) => unzip(new Uint8Array(data), (e, data2) => {
-    if (!e) {
-      r(data2);
-    } else {
-      j(e);
-    }
-  }));
-  let files2 = Object.entries(unzipped);
-  if (!dotnet.instance.Module.FS.analyzePath("/libsdl/Celeste").exists) {
-    dotnet.instance.Module.FS.mkdir("/libsdl/Celeste", 493);
-  }
-  if (!dotnet.instance.Module.FS.analyzePath("/libsdl/Celeste/Saves").exists) {
-    dotnet.instance.Module.FS.mkdir("/libsdl/Celeste/Saves", 493);
-  }
-  for (let [name, data2] of files2) {
-    dotnet.instance.Module.FS.writeFile(`/libsdl/Celeste/Saves/${name}`, data2);
-  }
-  await persistRuntimeDir("/libsdl/Celeste/Saves");
-
+  return window.celesteImportSave(file, { FS: dotnet.instance.Module.FS, unzip, persist: persistRuntimeDir });
 }
 async function uploadsave() {
-  let input = h("input", { type: "file" });
-  await new Promise((r) => {
-    input.onchange = async () => {
-      let file = input.files[0];
-      unzipsave(file);
-      r();
-    };
-    input.click();
-    input.remove();
-  });
+  const input = document.createElement("input");
+  input.type = "file"; input.accept = ".zip,.celeste";
+  input.style.display = "none"; document.body.appendChild(input);
+  try {
+    const file = await new Promise(resolve => {
+      input.onchange = () => resolve(input.files?.[0]);
+      input.oncancel = () => resolve(null);
+      input.click();
+    });
+    if (!file) return;
+    const count = await unzipsave(file);
+    alert("Imported " + count + " save file(s). Restart the app to load them. Existing saves were backed up before replacement.");
+  } catch (error) { alert("Save import failed: " + (error.message || error)); }
+  finally { input.remove(); }
 }
 
 // SaveManager.jsx
@@ -5618,7 +5609,7 @@ function SaveManager() {
         await uploadsave();
         app.savesmenu.close();
       }
-    }, /* @__PURE__ */ h("span", { class: "material-symbols-rounded" }, "upload"), /* @__PURE__ */ h("span", { class: "label" }, "Upload from computer")))
+    }, /* @__PURE__ */ h("span", { class: "material-symbols-rounded" }, "upload"), /* @__PURE__ */ h("span", { class: "label" }, "Choose save file or ZIP")))
   ), /* @__PURE__ */ h("button", {
     id: "dl", "on:click": async () => {
       await downloadsave();
@@ -6045,7 +6036,7 @@ function IntroSplash() {
   this.downloaded = !DRM;
   this.showprogress = true;
   this.status = "Loading game data";
-  window.celesteSetBootStatus = (text, message) => {
+  window.celesteSetBootStatus = (text, message, progressOverride) => {
     this.status = text || message || this.status;
     const progressSteps = {
       "creating dotnet runtime": 8,
@@ -6065,7 +6056,8 @@ function IntroSplash() {
       "starting game": 98,
       "complete": 100
     };
-    if (progressSteps[message] !== void 0) this.progress = progressSteps[message];
+    if (progressOverride !== void 0) this.progress = progressOverride;
+    else if (progressSteps[message] !== void 0) this.progress = progressSteps[message];
   };
   if (window.SINGLEFILE) {
     this.downloaded = true;
@@ -6212,6 +6204,11 @@ function IntroSplash() {
       if (this.decrypted) await finish();
     } catch (err) {
       console.error("Auto-start failed", err);
+      this.status = "Startup error: " + (err?.message || String(err));
+      for (const label of document.querySelectorAll("#static-boot-status, #boot-status-label")) {
+        label.textContent = this.status;
+        label.style.color = "#ff6b6b";
+      }
     }
   }, 250);
   const progressContent = $if(
